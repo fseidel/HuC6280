@@ -195,6 +195,7 @@ reg bbr_ins;            // doing BBR instruction
 reg bit_ins;            // doing BIT instruction
 reg bit_ins_nv;         // doing BIT instruction that will update the n and v 
                         // flags (i.e. not BIT imm)
+reg txx_ins;            // doing transfer instruction (COMBINATIONAL!)
 reg tii;                // doing TII instruction
 reg tdd;                // doing TDD instruction
 reg tin;                // doing TIN instruction
@@ -221,6 +222,7 @@ reg [15:0] txx_src;
 reg [15:0] txx_dst;
 reg [15:0] txx_len;
 reg        txx_alt;
+
    
 /*
  * ALU operations
@@ -331,7 +333,7 @@ parameter
   TXXE    = 7'd74, //write DST                      
   TXXF    = 7'd75, //SRC++, LEN--                        
   TXXG    = 7'd76, //DST++, compare LEN to 0, alt = ~alt
-  TXXH    = 7'd77, //NOP                            
+  TXXH    = 7'd77, //PC++                            
   TXXI    = 7'd78, //POP X                          
   TXXJ    = 7'd79, //POP A                          
   TXXK    = 7'd80; //POP Y                          
@@ -472,7 +474,7 @@ always @*
  */
 always @*
     case( state )
-        DECODE:         if( (~I & IRQ) | NMI_edge )
+        DECODE:         if( (~I & IRQ) | NMI_edge | txx_ins)
                             PC_inc = 0;
                         else
                             PC_inc = 1;
@@ -489,7 +491,13 @@ always @*
         JMP1,
         RTI4,
         RTS3,
-        BBX2:           PC_inc = 1;
+        BBX2,
+        TXX4,
+        TXX5,
+        TXX6,
+        TXX7,
+        TXX8,
+        TXXH:           PC_inc = 1;
 
         JMPIX1:         PC_inc = ~CO;       // Don't increment PC if we are 
                                             // going to go through JMPIX2
@@ -1247,7 +1255,13 @@ always @(posedge clk or posedge reset)
         TXX2    : state <= TXX3;  
         TXX3    : state <= TXX4;
         TXX4    : state <= TXX5;
-        TXX5    : state <= TXX5; //temporary hack for debug of stack logic  
+        TXX5    : state <= TXX6;  
+        TXX6    : state <= TXX7;
+        TXX7    : state <= TXX8;
+        TXX8    : state <= TXX9;
+        TXX9    : state <= TXXA;
+        TXXA    : state <= TXXB;
+        TXXB    : state <= TXXB; //temporary hack for debug             
     endcase
 
 /*
@@ -1576,6 +1590,15 @@ always @(posedge clk ) // Transfer instructions
           8'b1111_0011: tai <= 1; //TAI
           default: {tii, tdd, tin, tia, tai} <= 0;
         endcase
+always @*
+  if( state == DECODE && RDY )
+    casex( IR )
+      8'b0111_0011,
+      8'b11xx_0011: txx_ins = 1;
+      default: txx_ins = 0;
+    endcase
+  
+  
   
 always @(posedge clk )
      if( state == DECODE && RDY )
@@ -1620,6 +1643,21 @@ always @(posedge clk)
   if( state == BBX2 && RDY ) begin
     bbx_disp <= DIMUX;
   end
+
+//fseidel: logic for handling parameter read on transfer instructions
+always @(posedge clk)
+  if( RDY ) begin
+    case( state )
+      TXX5: txx_src[7:0]  <= DI;
+      TXX6: txx_src[15:8] <= DI;
+      TXX7: txx_dst[7:0]  <= DI;
+      TXX8: txx_dst[15:8] <= DI;
+      TXX9: txx_len[7:0]  <= DI;
+      TXXA: txx_len[15:8] <= DI;
+      default:; //do nothing
+    endcase
+  end
+  
   
 always @*
   case( cond_code )
