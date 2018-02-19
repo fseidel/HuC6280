@@ -55,8 +55,9 @@
  * If IMPLEMENT_CORRECT_BCD_FLAGS is defined, this additional logic is added
  */
 
-// `define IMPLEMENT_CORRECT_BCD_FLAGS
+`define IMPLEMENT_CORRECT_BCD_FLAGS
 
+//set this to get debugging aids
 `define SIM
 
 module cpu_65c02( clk, reset, AB, DI, DO, WE, IRQ, NMI, RDY );
@@ -112,10 +113,13 @@ wire [7:0] AO;          // ALU output after BCD adjustment
 reg  WE;                // Write Enable
 reg  CI;                // Carry In
 wire CO;                // Carry Out 
-wire [7:0] PCH = PC[15:8];
-wire [7:0] PCL = PC[7:0];
-
-reg NMI_edge = 0;       // captured NMI edge
+wire [7:0] PCH       = PC[15:8];
+wire [7:0] PCL       = PC[7:0];
+  
+reg        bbx_status;    // a cheap hack to make my life easier (fseidel)
+reg [7:0]  bbx_disp;      // ditto
+  
+reg        NMI_edge  = 0;       // captured NMI edge
 
 reg [1:0] regsel;                       // Select A, X, Y or S register
 wire [7:0] regfile = AXYS[regsel];      // Selected register output
@@ -173,7 +177,7 @@ reg shift_right;        // Instruction ALU shift/rotate right
 reg alu_shift_right;    // Current cycle shift right enable
 reg [3:0] op;           // Main ALU operation for instruction
 reg [3:0] alu_op;       // Current cycle ALU operation
-reg [2:0] xmb_shift;    // bit select for RMB/SMB instructions
+reg [2:0] mask_shift;    // bit select for RMB/SMB instructions
 reg adc_bcd;            // ALU should do BCD style carry 
 reg adj_bcd;            // results should be BCD adjusted
 
@@ -186,6 +190,8 @@ reg trb_ins;            // doing TRB instruction
 reg txb_ins;            // doing TSB/TRB instruction
 reg rmb_ins;            // doing RMB instruction
 reg xmb_ins;            // doing SMB/RMB instruction
+reg bbx_ins;            // doing BBS/BBR instruction
+reg bbr_ins;            // doing BBR instruction
 reg bit_ins;            // doing BIT instruction
 reg bit_ins_nv;         // doing BIT instruction that will update the n and v flags (i.e. not BIT imm)
 reg plp;                // doing PLP instruction
@@ -275,8 +281,23 @@ parameter
     IND0   = 6'd50, // (ZP)    - fetch ZP address, and send to ALU (+0)
     JMPIX0 = 6'd51, // JMP (,X)- fetch LSB and send to ALU (+X)
     JMPIX1 = 6'd52, // JMP (,X)- fetch MSB and send to ALU (+Carry)
-    JMPIX2 = 6'd53; // JMP (,X)- Wait for ALU (only if needed)
-
+    JMPIX2 = 6'd53, // JMP (,X)- Wait for ALU (only if needed)
+  /**
+    BBX0   = 6'd54, // BB{R,S} - increment PC
+    BBX1   = 6'd55, // BB{R,S} - fetch ZP data and send to ALU, test
+    BBX2   = 6'd56, // BB{R,S} - do nothing
+    BBX3   = 6'd57, // BB{R,S} - fetch displacement, possibly goto fetch
+    BBX4   = 6'd58, // BB{R,S} - add displacement to PC[7:0] (PC++????)
+    BBX5   = 6'd59; // BB{R,S} - add carry to PC[15:8], goto fetch
+   */
+    //going to take liberties with bus cycles for now
+    BBX0   = 6'd54, // BB{R,S} - fetch ZP data
+    BBX1   = 6'd55, // BB{R,S} - test
+    BBX2   = 6'd56, // BB{R,S} - fetch displacement, PC++
+    BBX3   = 6'd57, // BB{R,S} - goto fetch if test failed, add displacement to PC[7:0]
+    BBX4   = 6'd58, // BB{R,S} - add carry to PC[15:8]
+    BBX5   = 6'd59; // BB{R,S} - set up address bus
+  
 `ifdef SIM
 
 /*
@@ -286,61 +307,66 @@ reg [8*6-1:0] statename;
 
 always @*
     case( state )
-            DECODE: statename = "DECODE";
-            REG:    statename = "REG";
-            ZP0:    statename = "ZP0";
-            ZPX0:   statename = "ZPX0";
-            ZPX1:   statename = "ZPX1";
-            ABS0:   statename = "ABS0";
-            ABS1:   statename = "ABS1";
-            ABSX0:  statename = "ABSX0";
-            ABSX1:  statename = "ABSX1";
-            ABSX2:  statename = "ABSX2";
-            IND0:   statename = "IND0";
-            INDX0:  statename = "INDX0";
-            INDX1:  statename = "INDX1";
-            INDX2:  statename = "INDX2";
-            INDX3:  statename = "INDX3";
-            INDY0:  statename = "INDY0";
-            INDY1:  statename = "INDY1";
-            INDY2:  statename = "INDY2";
-            INDY3:  statename = "INDY3";
-             READ:  statename = "READ";
-            WRITE:  statename = "WRITE";
-            FETCH:  statename = "FETCH";
-            PUSH0:  statename = "PUSH0";
-            PUSH1:  statename = "PUSH1";
-            PULL0:  statename = "PULL0";
-            PULL1:  statename = "PULL1";
-            PULL2:  statename = "PULL2";
-            JSR0:   statename = "JSR0";
-            JSR1:   statename = "JSR1";
-            JSR2:   statename = "JSR2";
-            JSR3:   statename = "JSR3";
-            RTI0:   statename = "RTI0";
-            RTI1:   statename = "RTI1";
-            RTI2:   statename = "RTI2";
-            RTI3:   statename = "RTI3";
-            RTI4:   statename = "RTI4";
-            RTS0:   statename = "RTS0";
-            RTS1:   statename = "RTS1";
-            RTS2:   statename = "RTS2";
-            RTS3:   statename = "RTS3";
-            BRK0:   statename = "BRK0";
-            BRK1:   statename = "BRK1";
-            BRK2:   statename = "BRK2";
-            BRK3:   statename = "BRK3";
-            BRA0:   statename = "BRA0";
-            BRA1:   statename = "BRA1";
-            BRA2:   statename = "BRA2";
-            JMP0:   statename = "JMP0";
-            JMP1:   statename = "JMP1";
-            JMPI0:  statename = "JMPI0";
-            JMPI1:  statename = "JMPI1";
-            JMPIX0: statename = "JMPIX0";
-            JMPIX1: statename = "JMPIX1";
-            JMPIX2: statename = "JMPIX2";
-          
+      DECODE: statename  = "DECODE";
+      REG:    statename  = "REG";
+      ZP0:    statename  = "ZP0";
+      ZPX0:   statename  = "ZPX0";
+      ZPX1:   statename  = "ZPX1";
+      ABS0:   statename  = "ABS0";
+      ABS1:   statename  = "ABS1";
+      ABSX0:  statename  = "ABSX0";
+      ABSX1:  statename  = "ABSX1";
+      ABSX2:  statename  = "ABSX2";
+      IND0:   statename  = "IND0";
+      INDX0:  statename  = "INDX0";
+      INDX1:  statename  = "INDX1";
+      INDX2:  statename  = "INDX2";
+      INDX3:  statename  = "INDX3";
+      INDY0:  statename  = "INDY0";
+      INDY1:  statename  = "INDY1";
+      INDY2:  statename  = "INDY2";
+      INDY3:  statename  = "INDY3";
+      READ:  statename   = "READ";
+      WRITE:  statename  = "WRITE";
+      FETCH:  statename  = "FETCH";
+      PUSH0:  statename  = "PUSH0";
+      PUSH1:  statename  = "PUSH1";
+      PULL0:  statename  = "PULL0";
+      PULL1:  statename  = "PULL1";
+      PULL2:  statename  = "PULL2";
+      JSR0:   statename  = "JSR0";
+      JSR1:   statename  = "JSR1";
+      JSR2:   statename  = "JSR2";
+      JSR3:   statename  = "JSR3";
+      RTI0:   statename  = "RTI0";
+      RTI1:   statename  = "RTI1";
+      RTI2:   statename  = "RTI2";
+      RTI3:   statename  = "RTI3";
+      RTI4:   statename  = "RTI4";
+      RTS0:   statename  = "RTS0";
+      RTS1:   statename  = "RTS1";
+      RTS2:   statename  = "RTS2";
+      RTS3:   statename  = "RTS3";
+      BRK0:   statename  = "BRK0";
+      BRK1:   statename  = "BRK1";
+      BRK2:   statename  = "BRK2";
+      BRK3:   statename  = "BRK3";
+      BRA0:   statename  = "BRA0";
+      BRA1:   statename  = "BRA1";
+      BRA2:   statename  = "BRA2";
+      JMP0:   statename  = "JMP0";
+      JMP1:   statename  = "JMP1";
+      JMPI0:  statename  = "JMPI0";
+      JMPI1:  statename  = "JMPI1";
+      JMPIX0: statename  = "JMPIX0";
+      JMPIX1: statename  = "JMPIX1";
+      JMPIX2: statename  = "JMPIX2";
+      BBX0:   statename  = "BBX0";
+      BBX1:   statename  = "BBX1";
+      BBX2:   statename  = "BBX2";
+      BBX3:   statename  = "BBX3";
+      BBX4:   statename  = "BBX4";
+      BBX5:   statename  = "BBX5";
     endcase
 
 //always @( PC )
@@ -369,10 +395,12 @@ always @*
         RTS3,           
         RTI4:           PC_temp = { DIMUX, ADD };
                         
-        BRA1:           PC_temp = { ABH, ADD };
+        BRA1,
+        BBX4:           PC_temp  = { ABH, ADD };
 
         JMPIX2,
-        BRA2:           PC_temp = { ADD, PCL };
+        BRA2,
+        BBX5:           PC_temp = { ADD, PCL };
 
         BRK2:           PC_temp =      res ? 16'hfffc : 
                                   NMI_edge ? 16'hfffa : 16'hfffe;
@@ -401,7 +429,8 @@ always @*
         JMPI1,
         JMP1,
         RTI4,
-        RTS3:           PC_inc = 1;
+        RTS3,
+        BBX2:           PC_inc = 1;
 
         JMPIX1:         PC_inc = ~CO;       // Don't increment PC if we are going to go through JMPIX2
 
@@ -441,7 +470,8 @@ always @*
         JMPIX2,
         ABSX2:          AB = { ADD, ABL };
 
-        BRA1:           AB = { ABH, ADD };
+        BRA1,
+        BBX4:           AB = { ABH, ADD };
 
         JSR0,
         PUSH1,
@@ -465,7 +495,8 @@ always @*
         INDX2:          AB = { ZEROPAGE, ADD };
 
         ZP0,
-        INDY0:          AB = { ZEROPAGE, DIMUX };
+        INDY0,
+        BBX0:           AB = { ZEROPAGE, DIMUX };
 
         REG,
         READ,
@@ -674,7 +705,8 @@ always @*
         READ:   alu_op = op;
 
         BRA1:   alu_op = backwards ? OP_SUB : OP_ADD; 
-
+        BBX4:   alu_op = (bbx_disp[7]) ? OP_SUB : OP_ADD;
+      
         FETCH,
         REG :   alu_op = op; 
 
@@ -688,6 +720,8 @@ always @*
         JSR0,
         JSR1:   alu_op = OP_SUB;
 
+        BBX1:   alu_op = OP_AND;
+      
      default:   alu_op = OP_ADD;
     endcase
 
@@ -739,15 +773,20 @@ always @*
         PUSH1:  AI = regfile;
 
         BRA0,
-        READ:   AI = DIMUX;
+        READ,
+        BBX1:   AI  = DIMUX;
+        
 
-        BRA1:   AI = ABH;       // don't use PCH in case we're 
+        BRA1:   AI      = ABH;       // don't use PCH in case we're 
 
-        FETCH:  AI = load_only ? 0 : regfile;
+        FETCH:  AI      = load_only ? 0 : regfile;
 
         DECODE,
         ABS1:   AI = 8'hxx;     // don't care
 
+        BBX3:   AI = bbx_disp;
+        BBX4:   AI = PCH;
+      
         default:  AI = 0;
     endcase
 
@@ -756,11 +795,11 @@ always @*
  * ALU B Input mux
  */
 
-  wire [7:0] BI_txb, BI_xmb, xmb_bitmask;
+  wire [7:0] BI_txb, BI_xmb, single_bitmask;
   
   assign BI_txb  = (trb_ins) ? ~regfile : regfile;
-  assign BI_xmb  = (rmb_ins) ? ~xmb_bitmask : xmb_bitmask;
-  assign xmb_bitmask = 8'b1 << xmb_shift;
+  assign BI_xmb  = (rmb_ins) ? ~single_bitmask : single_bitmask;
+  assign single_bitmask = 8'b1 << mask_shift;
     
 always @*
     case( state )
@@ -780,33 +819,37 @@ always @*
          PUSH0, 
          PUSH1,
          PULL0,
-         RTS0:  BI = 8'h00;
+         RTS0,
+         BBX4:   BI = 8'h00;
 
          READ: begin
            if(txb_ins) BI  = BI_txb;
            else if(xmb_ins) BI = BI_xmb;
            else BI = 8'h00;
-           
            end
 
-         BRA0:  BI = PCL;
+         BRA0,
+         BBX3:  BI  = PCL;
 
          DECODE,
-         ABS1:  BI = 8'hxx;
-
+         ABS1:  BI  = 8'hxx;
+      
+         BBX1:  BI  = BI_xmb;
+           
          default:       BI = DIMUX;
     endcase
 
 /*
  * ALU CI (carry in) mux
  */
-
+//fseidel: note, I believe there is a bug when CI=CO and ~RDY
 always @*
     case( state )
         INDY2,
         BRA1,
         JMPIX1,
-        ABSX1:  CI = CO;
+        ABSX1, 
+        BBX4:   CI = CO;
 
         DECODE,
         ABS1:   CI = 1'bx;
@@ -987,10 +1030,12 @@ always @(posedge clk or posedge reset)
                 8'b0110_0000:   state <= RTS0;
                 8'b0110_1100:   state <= JMPI0;
                 8'b0111_1100:   state <= JMPIX0;
-                8'bxxxx_0111:   state <= ZP0;//RMB/SMB
+                8'bxxxx_0111:   state <= ZP0;   //RMB/SMB
+                8'bxxxx_1111:   state <= BBX0;
 `ifdef IMPLEMENT_NOPS             
                 //7 column is now RMB/SMB
-                8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B/F column)
+                //F column is now BBR/BBS
+                8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column handled correctly below)
                 8'bx1x1_1100:   state <= ABS0;  // (NOP3: C column)
 `endif
@@ -1079,7 +1124,7 @@ always @(posedge clk or posedge reset)
         RTS2    : state <= RTS3;
         RTS3    : state <= FETCH;
 
-        BRA0    : state <= cond_true ? BRA1 : DECODE;
+        BRA0     : state <= cond_true ? BRA1 : DECODE;
         BRA1    : state <= (CO ^ backwards) ? BRA2 : DECODE;
         BRA2    : state <= DECODE;
 
@@ -1093,6 +1138,13 @@ always @(posedge clk or posedge reset)
         BRK1    : state <= BRK2;
         BRK2    : state <= BRK3;
         BRK3    : state <= JMP0;
+
+        BBX0    : state <= BBX1;
+        BBX1    : state <= BBX2;
+        BBX2    : state <= BBX3;
+        BBX3    : state <= (bbx_status) ? BBX4 : FETCH;
+        BBX4    : state <= BBX5;
+        BBX5    : state <= FETCH;
 
     endcase
 
@@ -1302,7 +1354,8 @@ always @(posedge clk )
                                 op <= OP_OR;
           
                 8'b0xxx_0111,   // RMB
-                8'b0001_x100:   // TRB
+                8'b0001_x100,   // TRB
+                8'bxxxx_1111:   // BBR/BBS
                                 op <= OP_AND;
 
                 8'b00xx_x110,   // ROL, ASL
@@ -1369,11 +1422,18 @@ always @(posedge clk )
 always @(posedge clk )
   if( state == DECODE && RDY )
     casex( IR )
-      8'bxxxx_0111:   begin     // RMB/SMB
-        xmb_ins                 <= 1;
-        xmb_shift               <= IR[6:4];
+      8'bxxxx_0111: begin     // RMB/SMB
+        xmb_ins    <= 1;
+        mask_shift <= IR[6:4];
       end
-      default:        xmb_ins <= 0;
+      8'bxxxx_1111: begin
+        bbx_ins    <= 1;
+        mask_shift <= IR[6:4];
+      end
+      default:      begin
+        xmb_ins <= 0;
+        bbx_ins <= 0;
+      end
     endcase
   
 always @(posedge clk )
@@ -1383,6 +1443,25 @@ always @(posedge clk )
                                 rmb_ins <= 1;
 
                 default:        rmb_ins <= 0;
+        endcase
+
+always @(posedge clk )
+  if( state == DECODE && RDY )
+    casex( IR )
+      8'bxxxx_1111:   begin     // BBR/BBS
+        bbx_ins                 <= 1;
+        mask_shift               <= IR[6:4];
+      end
+      default:        bbx_ins <= 0;
+    endcase
+  
+always @(posedge clk )
+     if( state == DECODE && RDY )
+        casex( IR )
+                8'b0xxx_1111:   // RMB
+                                bbr_ins <= 1;
+
+                default:        bbr_ins <= 0;
         endcase
 
 always @(posedge clk )
@@ -1417,18 +1496,30 @@ always @(posedge clk)
     if( RDY )
         cond_code <= IR[7:4];
 
+//fseidel: logic for handling storage of BBX compare result
+always @(posedge clk)
+  if( state == BBX1 && RDY ) begin
+    bbx_status <= (bbr_ins) ? AZ : ~AZ;
+  end
+
+//fseidel: logic for handling storage of displacement for bbx
+always @(posedge clk)
+  if( state == BBX2 && RDY ) begin
+    bbx_disp <= DIMUX;
+  end
+  
 always @*
-    case( cond_code )
-            4'b0001: cond_true = ~N;
-            4'b0011: cond_true = N;
-            4'b0101: cond_true = ~V;
-            4'b0111: cond_true = V;
-            4'b1001: cond_true = ~C;
-            4'b1011: cond_true = C;
-            4'b1101: cond_true = ~Z;
-            4'b1111: cond_true = Z;
-            default: cond_true = 1; // BRA is 80
-    endcase
+  case( cond_code )
+    4'b0001: cond_true = ~N;
+    4'b0011: cond_true = N;
+    4'b0101: cond_true = ~V;
+    4'b0111: cond_true = V;
+    4'b1001: cond_true = ~C;
+    4'b1011: cond_true = C;
+    4'b1101: cond_true = ~Z;
+    4'b1111: cond_true = Z;
+    default: cond_true = 1; // BRA is 80
+  endcase // case ( cond_code )
 
 
 reg NMI_1 = 0;          // delayed NMI signal

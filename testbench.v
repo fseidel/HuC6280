@@ -14,11 +14,12 @@ module tb;
   assign RDY = 1'b1;
 
   initial begin
-    $monitor("AB: %x, A: %x, X: %x, Y: %x", AB, CPU.A, CPU.X, CPU.Y);
+    $monitor("PC: %x, State: %s, A: %x, X: %x, Y: %x",
+             CPU.PC, CPU.statename, CPU.A, CPU.X, CPU.Y);
     clk        = 0;
     reset      = 1'b1;
     #10 reset <= 1'b0;
-    #1000 $finish;
+    #10000 $finish;
   end
 
   initial begin
