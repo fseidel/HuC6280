@@ -148,7 +148,7 @@ wire [7:0] P = { N, V, 2'b11, D, I, Z, C };
  * instruction decoder/sequencer
  */
 
-reg [5:0] state;
+reg [6:0] state;
 
 /*
  * control signals
@@ -193,7 +193,14 @@ reg xmb_ins;            // doing SMB/RMB instruction
 reg bbx_ins;            // doing BBS/BBR instruction
 reg bbr_ins;            // doing BBR instruction
 reg bit_ins;            // doing BIT instruction
-reg bit_ins_nv;         // doing BIT instruction that will update the n and v flags (i.e. not BIT imm)
+reg bit_ins_nv;         // doing BIT instruction that will update the n and v 
+                        // flags (i.e. not BIT imm)
+reg tii;                // doing TII instruction
+reg tdd;                // doing TDD instruction
+reg tin;                // doing TIN instruction
+reg tia;                // doing TIA instruction
+reg tai;                // doing TAI instruction
+  
 reg plp;                // doing PLP instruction
 reg php;                // doing PHP instruction 
 reg clc;                // clear carry
@@ -207,6 +214,14 @@ reg brk;                // doing BRK
 
 reg res;                // in reset
 
+/*
+ * Block transfer bookkeeping
+ */
+reg [15:0] txx_src;
+reg [15:0] txx_dst;
+reg [15:0] txx_len;
+reg        txx_alt;
+   
 /*
  * ALU operations
  */
@@ -228,82 +243,105 @@ parameter
  */
 
 parameter 
-    ABS0   = 6'd0,  // ABS     - fetch LSB      
-    ABS1   = 6'd1,  // ABS     - fetch MSB
-    ABSX0  = 6'd2,  // ABS, X  - fetch LSB and send to ALU (+X)
-    ABSX1  = 6'd3,  // ABS, X  - fetch MSB and send to ALU (+Carry)
-    ABSX2  = 6'd4,  // ABS, X  - Wait for ALU (only if needed)
-    BRA0   = 6'd5,  // Branch  - fetch offset and send to ALU (+PC[7:0])
-    BRA1   = 6'd6,  // Branch  - fetch opcode, and send PC[15:8] to ALU 
-    BRA2   = 6'd7,  // Branch  - fetch opcode (if page boundary crossed)
-    BRK0   = 6'd8,  // BRK/IRQ - push PCH, send S to ALU (-1)
-    BRK1   = 6'd9,  // BRK/IRQ - push PCL, send S to ALU (-1)
-    BRK2   = 6'd10, // BRK/IRQ - push P, send S to ALU (-1)
-    BRK3   = 6'd11, // BRK/IRQ - write S, and fetch @ fffe
-    DECODE = 6'd12, // IR is valid, decode instruction, and write prev reg
-    FETCH  = 6'd13, // fetch next opcode, and perform prev ALU op
-    INDX0  = 6'd14, // (ZP,X)  - fetch ZP address, and send to ALU (+X)
-    INDX1  = 6'd15, // (ZP,X)  - fetch LSB at ZP+X, calculate ZP+X+1
-    INDX2  = 6'd16, // (ZP,X)  - fetch MSB at ZP+X+1
-    INDX3  = 6'd17, // (ZP,X)  - fetch data 
-    INDY0  = 6'd18, // (ZP),Y  - fetch ZP address, and send ZP to ALU (+1)
-    INDY1  = 6'd19, // (ZP),Y  - fetch at ZP+1, and send LSB to ALU (+Y) 
-    INDY2  = 6'd20, // (ZP),Y  - fetch data, and send MSB to ALU (+Carry)
-    INDY3  = 6'd21, // (ZP),Y) - fetch data (if page boundary crossed)
-    JMP0   = 6'd22, // JMP     - fetch PCL and hold
-    JMP1   = 6'd23, // JMP     - fetch PCH
-    JMPI0  = 6'd24, // JMP IND - fetch LSB and send to ALU for delay (+0)
-    JMPI1  = 6'd25, // JMP IND - fetch MSB, proceed with JMP0 state
-    JSR0   = 6'd26, // JSR     - push PCH, save LSB, send S to ALU (-1)
-    JSR1   = 6'd27, // JSR     - push PCL, send S to ALU (-1)
-    JSR2   = 6'd28, // JSR     - write S
-    JSR3   = 6'd29, // JSR     - fetch MSB
-    PULL0  = 6'd30, // PLP/PLA/PLX/PLY - save next op in IRHOLD, send S to ALU (+1)
-    PULL1  = 6'd31, // PLP/PLA/PLX/PLY - fetch data from stack, write S
-    PULL2  = 6'd32, // PLP/PLA/PLX/PLY - prefetch op, but don't increment PC
-    PUSH0  = 6'd33, // PHP/PHA/PHX/PHY - send A to ALU (+0)
-    PUSH1  = 6'd34, // PHP/PHA/PHX/PHY - write A/P, send S to ALU (-1)
-    READ   = 6'd35, // Read memory for read/modify/write (INC, DEC, shift)
-    REG    = 6'd36, // Read register for reg-reg transfers
-    RTI0   = 6'd37, // RTI     - send S to ALU (+1)
-    RTI1   = 6'd38, // RTI     - read P from stack 
-    RTI2   = 6'd39, // RTI     - read PCL from stack
-    RTI3   = 6'd40, // RTI     - read PCH from stack
-    RTI4   = 6'd41, // RTI     - read PCH from stack
-    RTS0   = 6'd42, // RTS     - send S to ALU (+1)
-    RTS1   = 6'd43, // RTS     - read PCL from stack 
-    RTS2   = 6'd44, // RTS     - write PCL to ALU, read PCH 
-    RTS3   = 6'd45, // RTS     - load PC and increment
-    WRITE  = 6'd46, // Write memory for read/modify/write 
-    ZP0    = 6'd47, // Z-page  - fetch ZP address
-    ZPX0   = 6'd48, // ZP, X   - fetch ZP, and send to ALU (+X)
-    ZPX1   = 6'd49, // ZP, X   - load from memory
-    IND0   = 6'd50, // (ZP)    - fetch ZP address, and send to ALU (+0)
-    JMPIX0 = 6'd51, // JMP (,X)- fetch LSB and send to ALU (+X)
-    JMPIX1 = 6'd52, // JMP (,X)- fetch MSB and send to ALU (+Carry)
-    JMPIX2 = 6'd53, // JMP (,X)- Wait for ALU (only if needed)
-  /**
-    BBX0   = 6'd54, // BB{R,S} - increment PC
-    BBX1   = 6'd55, // BB{R,S} - fetch ZP data and send to ALU, test
-    BBX2   = 6'd56, // BB{R,S} - do nothing
-    BBX3   = 6'd57, // BB{R,S} - fetch displacement, possibly goto fetch
-    BBX4   = 6'd58, // BB{R,S} - add displacement to PC[7:0] (PC++????)
-    BBX5   = 6'd59; // BB{R,S} - add carry to PC[15:8], goto fetch
-   */
-    //going to take liberties with bus cycles for now
-    BBX0   = 6'd54, // BB{R,S} - fetch ZP data
-    BBX1   = 6'd55, // BB{R,S} - test
-    BBX2   = 6'd56, // BB{R,S} - fetch displacement, PC++
-    BBX3   = 6'd57, // BB{R,S} - goto fetch if test failed, add displacement to PC[7:0]
-    BBX4   = 6'd58, // BB{R,S} - add carry to PC[15:8]
-    BBX5   = 6'd59; // BB{R,S} - set up address bus
-  
+  ABS0    = 7'd0,  // ABS     - fetch LSB      
+  ABS1    = 7'd1,  // ABS     - fetch MSB
+  ABSX0   = 7'd2,  // ABS, X  - fetch LSB and send to ALU (+X)
+  ABSX1   = 7'd3,  // ABS, X  - fetch MSB and send to ALU (+Carry)
+  ABSX2   = 7'd4,  // ABS, X  - Wait for ALU (only if needed)
+  BRA0    = 7'd5,  // Branch  - fetch offset and send to ALU (+PC[7:0])
+  BRA1    = 7'd6,  // Branch  - fetch opcode, and send PC[15:8] to ALU 
+  BRA2    = 7'd7,  // Branch  - fetch opcode (if page boundary crossed)
+  BRK0    = 7'd8,  // BRK/IRQ - push PCH, send S to ALU (-1)
+  BRK1    = 7'd9,  // BRK/IRQ - push PCL, send S to ALU (-1)
+  BRK2    = 7'd10, // BRK/IRQ - push P, send S to ALU (-1)
+  BRK3    = 7'd11, // BRK/IRQ - write S, and fetch @ fffe
+  DECODE  = 7'd12, // IR is valid, decode instruction, and write prev reg
+  FETCH   = 7'd13, // fetch next opcode, and perform prev ALU op
+  INDX0   = 7'd14, // (ZP,X)  - fetch ZP address, and send to ALU (+X)
+  INDX1   = 7'd15, // (ZP,X)  - fetch LSB at ZP+X, calculate ZP+X+1
+  INDX2   = 7'd16, // (ZP,X)  - fetch MSB at ZP+X+1
+  INDX3   = 7'd17, // (ZP,X)  - fetch data 
+  INDY0   = 7'd18, // (ZP),Y  - fetch ZP address, and send ZP to ALU (+1)
+  INDY1   = 7'd19, // (ZP),Y  - fetch at ZP+1, and send LSB to ALU (+Y) 
+  INDY2   = 7'd20, // (ZP),Y  - fetch data, and send MSB to ALU (+Carry)
+  INDY3   = 7'd21, // (ZP),Y) - fetch data (if page boundary crossed)
+  JMP0    = 7'd22, // JMP     - fetch PCL and hold
+  JMP1    = 7'd23, // JMP     - fetch PCH
+  JMPI0   = 7'd24, // JMP IND - fetch LSB and send to ALU for delay (+0)
+  JMPI1   = 7'd25, // JMP IND - fetch MSB, proceed with JMP0 state
+  JSR0    = 7'd26, // JSR     - push PCH, save LSB, send S to ALU (-1)
+  JSR1    = 7'd27, // JSR     - push PCL, send S to ALU (-1)
+  JSR2    = 7'd28, // JSR     - write S
+  JSR3    = 7'd29, // JSR     - fetch MSB
+  PULL0   = 7'd30, // PLP/PLA/PLX/PLY - save next op in IRHOLD, send S to ALU (+1)
+  PULL1   = 7'd31, // PLP/PLA/PLX/PLY - fetch data from stack, write S
+  PULL2   = 7'd32, // PLP/PLA/PLX/PLY - prefetch op, but don't increment PC
+  PUSH0   = 7'd33, // PHP/PHA/PHX/PHY - send A to ALU (+0)
+  PUSH1   = 7'd34, // PHP/PHA/PHX/PHY - write A/P, send S to ALU (-1)
+  READ    = 7'd35, // Read memory for read/modify/write (INC, DEC, shift)
+  REG     = 7'd36, // Read register for reg-reg transfers
+  RTI0    = 7'd37, // RTI     - send S to ALU (+1)
+  RTI1    = 7'd38, // RTI     - read P from stack 
+  RTI2    = 7'd39, // RTI     - read PCL from stack
+  RTI3    = 7'd40, // RTI     - read PCH from stack
+  RTI4    = 7'd41, // RTI     - read PCH from stack
+  RTS0    = 7'd42, // RTS     - send S to ALU (+1)
+  RTS1    = 7'd43, // RTS     - read PCL from stack 
+  RTS2    = 7'd44, // RTS     - write PCL to ALU, read PCH 
+  RTS3    = 7'd45, // RTS     - load PC and increment
+  WRITE   = 7'd46, // Write memory for read/modify/write 
+  ZP0     = 7'd47, // Z-page  - fetch ZP address
+  ZPX0    = 7'd48, // ZP, X   - fetch ZP, and send to ALU (+X)
+  ZPX1    = 7'd49, // ZP, X   - load from memory
+  IND0    = 7'd50, // (ZP)    - fetch ZP address, and send to ALU (+0)
+  JMPIX0  = 7'd51, // JMP (,X)- fetch LSB and send to ALU (+X)
+  JMPIX1  = 7'd52, // JMP (,X)- fetch MSB and send to ALU (+Carry)
+  JMPIX2  = 7'd53, // JMP (,X)- Wait for ALU (only if needed)
+         /**
+    BBX0   = 7'd54, // BB{R,S} - increment PC
+    BBX1   = 7'd55, // BB{R,S} - fetch ZP data and send to ALU, test
+    BBX2   = 7'd56, // BB{R,S} - do nothing
+    BBX3   = 7'd57, // BB{R,S} - fetch displacement, possibly goto fetch
+    BBX4   = 7'd58, // BB{R,S} - add displacement to PC[7:0] (PC++????)
+    BBX5   = 7'd59; // BB{R,S} - add carry to PC[15:8], goto fetch
+         */
+  //going to take liberties with bus cycles for now
+  BBX0    = 7'd54, // BB{R,S} - fetch ZP data
+  BBX1    = 7'd55, // BB{R,S} - test
+  BBX2    = 7'd56, // BB{R,S} - fetch displacement, PC++
+  BBX3    = 7'd57, // BB{R,S} - add displacement to PC[7:0]
+  BBX4    = 7'd58, // BB{R,S} - add carry to PC[15:8]
+  BBX5    = 7'd59, // BB{R,S} - set up address bus
+
+  //TXX - transfer instructions
+  TXX0    = 7'd60, //SP->ALU
+  TXX1    = 7'd61, //PUSH Y
+  TXX2    = 7'd62, //PUSH A
+  TXX3    = 7'd63, //PUSH X
+  TXX4    = 7'd64, //SRC[7:0],  PC++
+  TXX5    = 7'd65, //SRC[15:8], PC++
+  TXX6    = 7'd66, //DST[7:0],  PC++
+  TXX7    = 7'd67, //DST[15:0], PC++
+  TXX8    = 7'd68, //LEN[7:0],  PC++
+  TXX9    = 7'd69, //LEN[15:0]
+  TXXA    = 7'd70, //(read finishes)
+  TXXB    = 7'd71, //setup SRC address               
+  TXXC    = 7'd72, //read SRC byte                  
+  TXXD    = 7'd73, //setup DST address              
+  TXXE    = 7'd74, //write DST                      
+  TXXF    = 7'd75, //SRC++, LEN--                        
+  TXXG    = 7'd76, //DST++, compare LEN to 0, alt = ~alt
+  TXXH    = 7'd77, //NOP                            
+  TXXI    = 7'd78, //POP X                          
+  TXXJ    = 7'd79, //POP A                          
+  TXXK    = 7'd80; //POP Y                          
+
 `ifdef SIM
 
 /*
  * easy to read names in simulator output
  */
-reg [8*6-1:0] statename;
+reg [8*7-1:0] statename;
 
 always @*
     case( state )
@@ -367,6 +405,27 @@ always @*
       BBX3:   statename  = "BBX3";
       BBX4:   statename  = "BBX4";
       BBX5:   statename  = "BBX5";
+      TXX0:   statename  = "TXX0";
+      TXX1:   statename  = "TXX1";
+      TXX2:   statename  = "TXX2";
+      TXX3:   statename  = "TXX3";
+      TXX4:   statename  = "TXX4";
+      TXX5:   statename  = "TXX5";
+      TXX6:   statename  = "TXX6";
+      TXX7:   statename  = "TXX7";
+      TXX8:   statename  = "TXX8";
+      TXX9:   statename  = "TXX9";
+      TXXA:   statename  = "TXXA";
+      TXXB:   statename  = "TXXB";
+      TXXC:   statename  = "TXXC";
+      TXXD:   statename  = "TXXD";
+      TXXE:   statename  = "TXXE";
+      TXXF:   statename  = "TXXF";
+      TXXG:   statename  = "TXXG";
+      TXXH:   statename  = "TXXH";
+      TXXI:   statename  = "TXXI";
+      TXXJ:   statename  = "TXXJ";
+      TXXK:   statename  = "TXXK";
     endcase
 
 //always @( PC )
@@ -432,7 +491,8 @@ always @*
         RTS3,
         BBX2:           PC_inc = 1;
 
-        JMPIX1:         PC_inc = ~CO;       // Don't increment PC if we are going to go through JMPIX2
+        JMPIX1:         PC_inc = ~CO;       // Don't increment PC if we are 
+                                            // going to go through JMPIX2
 
         BRA1:           PC_inc = CO ^~ backwards;
 
@@ -487,7 +547,10 @@ always @*
         RTI1,
         RTI2,
         RTI3,
-        BRK2:           AB = { STACKPAGE, ADD };
+        BRK2,
+        TXX1,
+        TXX2,
+        TXX3:           AB = { STACKPAGE, ADD };
         
         INDY1,
         INDX1,
@@ -502,7 +565,9 @@ always @*
         READ,
         WRITE:          AB = { ABH, ABL };
 
-        default:        AB = PC;
+        
+
+      default:          AB = PC;
     endcase
 
 /*
@@ -534,7 +599,11 @@ always @*
         PUSH1:   DO = php ? P : ADD;
 
         BRK2:    DO = (IRQ | NMI_edge) ? (P & 8'b1110_1111) : P;
-
+      
+        TXX1,   
+        TXX2,    
+        TXX3:    DO = regfile;
+      
         default: DO = store_zero ? 0 : regfile;
     endcase
 
@@ -550,7 +619,10 @@ always @*
         JSR0,
         JSR1,
         PUSH1,
-        WRITE:   WE = 1;
+        WRITE,
+        TXX1,
+        TXX2,
+        TXX3:   WE = 1;
 
         INDX3,  // only if doing a STA, STX or STY
         INDY3,
@@ -579,7 +651,8 @@ always @*
          RTI3,
          BRK3,
          JSR0,
-         JSR2 : write_register = 1;
+         JSR2, 
+         TXX4: write_register = 1;
 
        default: write_register = 0;
     endcase
@@ -672,7 +745,12 @@ always @*
         RTI0,
         RTI3,
         RTS0,
-        RTS2   : regsel = SEL_S;
+        RTS2,
+        TXX0   : regsel = SEL_S;
+        TXX1   : regsel = SEL_Y;
+        TXX2   : regsel = SEL_A;
+        TXX3   : regsel = SEL_X;
+        TXX4   : regsel = SEL_S;
         
         default: regsel = src_reg; 
     endcase
@@ -706,6 +784,7 @@ always @*
 
         BRA1:   alu_op = backwards ? OP_SUB : OP_ADD; 
         BBX4:   alu_op = (bbx_disp[7]) ? OP_SUB : OP_ADD;
+
       
         FETCH,
         REG :   alu_op = op; 
@@ -718,7 +797,10 @@ always @*
         BRK1,
         BRK2,
         JSR0,
-        JSR1:   alu_op = OP_SUB;
+        JSR1,
+        TXX1,
+        TXX2,
+        TXX3:   alu_op = OP_SUB;
 
         BBX1:   alu_op = OP_AND;
       
@@ -770,8 +852,14 @@ always @*
         PULL0,
         INDY1,
         PUSH0,
-        PUSH1:  AI = regfile;
+        PUSH1,
+        TXX0:   AI  = regfile;
 
+        TXX1,
+        TXX2,
+        TXX3:   AI  = ADD;
+       
+      
         BRA0,
         READ,
         BBX1:   AI  = DIMUX;
@@ -820,7 +908,11 @@ always @*
          PUSH1,
          PULL0,
          RTS0,
-         BBX4:   BI = 8'h00;
+         BBX4,
+         TXX0,
+         TXX1,
+         TXX2,
+         TXX3:   BI = 8'h00;
 
          READ: begin
            if(txb_ins) BI  = BI_txb;
@@ -842,7 +934,6 @@ always @*
 /*
  * ALU CI (carry in) mux
  */
-//fseidel: note, I believe there is a bug when CI=CO and ~RDY
 always @*
     case( state )
         INDY2,
@@ -1032,11 +1123,16 @@ always @(posedge clk or posedge reset)
                 8'b0111_1100:   state <= JMPIX0;
                 8'bxxxx_0111:   state <= ZP0;   //RMB/SMB
                 8'bxxxx_1111:   state <= BBX0;
-`ifdef IMPLEMENT_NOPS             
+          
                 //7 column is now RMB/SMB
                 //F column is now BBR/BBS
+                //3 column is many things
+                8'b0111_0011:   state <= TXX0;  // TII
+                8'b11xx_0011:   state <= TXX0;  // TDD, TIN, TIA, TAI
+`ifdef IMPLEMENT_NOPS 
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
-                8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column handled correctly below)
+                8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column 
+                                                // handled correctly below)  
                 8'bx1x1_1100:   state <= ABS0;  // (NOP3: C column)
 `endif
                 8'b0x00_1000:   state <= PUSH0;
@@ -1146,6 +1242,12 @@ always @(posedge clk or posedge reset)
         BBX4    : state <= BBX5;
         BBX5    : state <= FETCH;
 
+        TXX0    : state <= TXX1;
+        TXX1    : state <= TXX2;
+        TXX2    : state <= TXX3;  
+        TXX3    : state <= TXX4;
+        TXX4    : state <= TXX5;
+        TXX5    : state <= TXX5; //temporary hack for debug of stack logic  
     endcase
 
 /*
@@ -1450,7 +1552,7 @@ always @(posedge clk )
     casex( IR )
       8'bxxxx_1111:   begin     // BBR/BBS
         bbx_ins                 <= 1;
-        mask_shift               <= IR[6:4];
+        mask_shift              <= IR[6:4];
       end
       default:        bbx_ins <= 0;
     endcase
@@ -1458,12 +1560,23 @@ always @(posedge clk )
 always @(posedge clk )
      if( state == DECODE && RDY )
         casex( IR )
-                8'b0xxx_1111:   // RMB
-                                bbr_ins <= 1;
+          8'b0xxx_1111:   // BBR
+                  bbr_ins <= 1;
 
-                default:        bbr_ins <= 0;
+          default: bbr_ins <= 0;
         endcase
 
+always @(posedge clk ) // Transfer instructions
+     if( state == DECODE && RDY )
+        casex( IR )
+          8'b0111_0011: tii <= 1; //TII
+          8'b1100_0011: tdd <= 1; //TDD
+          8'b1101_0011: tin <= 1; //TIN
+          8'b1110_0011: tia <= 1; //TIA
+          8'b1111_0011: tai <= 1; //TAI
+          default: {tii, tdd, tin, tia, tai} <= 0;
+        endcase
+  
 always @(posedge clk )
      if( state == DECODE && RDY )
         casex( IR )

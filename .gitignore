@@ -4,4 +4,7 @@ ucli.key
 *.hex
 *.bin
 *.o
-
+.restartSimSession.tcl*
+.synopsys_dve_rebuild.tcl*
+DVEfiles
+inter.vpd
