@@ -196,11 +196,11 @@ reg bit_ins;            // doing BIT instruction
 reg bit_ins_nv;         // doing BIT instruction that will update the n and v 
                         // flags (i.e. not BIT imm)
 reg txx_ins;            // doing transfer instruction (COMBINATIONAL!)
-reg tii;                // doing TII instruction
-reg tdd;                // doing TDD instruction
-reg tin;                // doing TIN instruction
-reg tia;                // doing TIA instruction
-reg tai;                // doing TAI instruction
+reg tii_ins;            // doing TII instruction
+reg tdd_ins;            // doing TDD instruction
+reg tin_ins;            // doing TIN instruction
+reg tia_ins;            // doing TIA instruction
+reg tai_ins;            // doing TAI instruction
   
 reg plp;                // doing PLP instruction
 reg php;                // doing PHP instruction 
@@ -326,14 +326,14 @@ parameter
   TXX7    = 7'd67, //DST[15:0], PC++
   TXX8    = 7'd68, //LEN[7:0],  PC++
   TXX9    = 7'd69, //LEN[15:0]
-  TXXA    = 7'd70, //(read finishes)
+  TXXA    = 7'd70, //(read finishes), txx_alt = 0
   TXXB    = 7'd71, //setup SRC address               
   TXXC    = 7'd72, //read SRC byte                  
   TXXD    = 7'd73, //setup DST address              
   TXXE    = 7'd74, //write DST                      
-  TXXF    = 7'd75, //SRC++, LEN--                        
-  TXXG    = 7'd76, //DST++, compare LEN to 0, alt = ~alt
-  TXXH    = 7'd77, //PC++                            
+  TXXF    = 7'd75, //modify SRC, LEN--                        
+  TXXG    = 7'd76, //modify DST, compare LEN to 0, txx_alt = ~alt
+  TXXH    = 7'd77, //SP->ALU, PC++                            
   TXXI    = 7'd78, //POP X                          
   TXXJ    = 7'd79, //POP A                          
   TXXK    = 7'd80; //POP Y                          
@@ -573,8 +573,12 @@ always @*
         READ,
         WRITE:          AB = { ABH, ABL };
 
-        
+        TXXB,
+        TXXC:           AB = txx_src + txx_alt;
 
+        TXXD,
+        TXXE:           AB = txx_dst + txx_alt;
+      
       default:          AB = PC;
     endcase
 
@@ -610,7 +614,8 @@ always @*
       
         TXX1,   
         TXX2,    
-        TXX3:    DO = regfile;
+        TXX3,
+        TXXE:    DO = regfile;
       
         default: DO = store_zero ? 0 : regfile;
     endcase
@@ -630,7 +635,8 @@ always @*
         WRITE,
         TXX1,
         TXX2,
-        TXX3:   WE = 1;
+        TXX3,
+        TXXE:   WE = 1;
 
         INDX3,  // only if doing a STA, STX or STY
         INDY3,
@@ -660,7 +666,8 @@ always @*
          BRK3,
          JSR0,
          JSR2, 
-         TXX4: write_register = 1;
+         TXX4,
+         TXXC: write_register = 1;
 
        default: write_register = 0;
     endcase
@@ -722,10 +729,12 @@ assign AZ1 = AZ;
  * ALU, but in case of the JSR0 we use the S register to temporarily store
  * the PCL. This is possible, because the S register itself is stored in
  * the ALU during those cycles.
+ * 
+ * Reading directly from the bus can also occur during a transfer
  */
 always @(posedge clk)
     if( write_register & RDY )
-        AXYS[regsel] <= (state == JSR0) ? DIMUX : AO;
+        AXYS[regsel] <= (state == JSR0 || state == TXXC) ? DIMUX : AO;
 
 /*
  * register select logic. This determines which of the A, X, Y or
@@ -756,7 +765,9 @@ always @*
         RTS2,
         TXX0   : regsel = SEL_S;
         TXX1   : regsel = SEL_Y;
-        TXX2   : regsel = SEL_A;
+        TXX2,
+        TXXC,
+        TXXE   : regsel = SEL_A;
         TXX3   : regsel = SEL_X;
         TXX4   : regsel = SEL_S;
         
@@ -1261,7 +1272,13 @@ always @(posedge clk or posedge reset)
         TXX8    : state <= TXX9;
         TXX9    : state <= TXXA;
         TXXA    : state <= TXXB;
-        TXXB    : state <= TXXB; //temporary hack for debug             
+        TXXB    : state <= TXXC;
+        TXXC    : state <= TXXD;
+        TXXD    : state <= TXXE;
+        TXXE    : state <= TXXF;  
+        TXXF    : state <= TXXG; 
+        TXXG    : state <= (txx_len == 0) ? TXXH : TXXB;
+        TXXH    : state <= TXXH; //temporary hack for debug
     endcase
 
 /*
@@ -1583,22 +1600,21 @@ always @(posedge clk )
 always @(posedge clk ) // Transfer instructions
      if( state == DECODE && RDY )
         casex( IR )
-          8'b0111_0011: tii <= 1; //TII
-          8'b1100_0011: tdd <= 1; //TDD
-          8'b1101_0011: tin <= 1; //TIN
-          8'b1110_0011: tia <= 1; //TIA
-          8'b1111_0011: tai <= 1; //TAI
-          default: {tii, tdd, tin, tia, tai} <= 0;
+          8'b0111_0011: tii_ins <= 1; //TII
+          8'b1100_0011: tdd_ins <= 1; //TDD
+          8'b1101_0011: tin_ins <= 1; //TIN
+          8'b1110_0011: tia_ins <= 1; //TIA
+          8'b1111_0011: tai_ins <= 1; //TAI
+          default: {tii_ins, tdd_ins, tin_ins, tia_ins, tai_ins} <= 0;
         endcase
+
 always @*
-  if( state == DECODE && RDY )
+  if( state == DECODE ) // fseidel: RDY shouldn't be necessary here
     casex( IR )
       8'b0111_0011,
       8'b11xx_0011: txx_ins = 1;
       default: txx_ins = 0;
     endcase
-  
-  
   
 always @(posedge clk )
      if( state == DECODE && RDY )
@@ -1644,7 +1660,7 @@ always @(posedge clk)
     bbx_disp <= DIMUX;
   end
 
-//fseidel: logic for handling parameter read on transfer instructions
+//fseidel: logic for handling txx state (minus alt bit)
 always @(posedge clk)
   if( RDY ) begin
     case( state )
@@ -1654,9 +1670,31 @@ always @(posedge clk)
       TXX8: txx_dst[15:8] <= DI;
       TXX9: txx_len[7:0]  <= DI;
       TXXA: txx_len[15:8] <= DI;
+      TXXF: begin
+        txx_len <= txx_len - 1; //always decrement the length counter
+        if( tii_ins | tin_ins | tia_ins )
+          txx_src <= txx_src + 1;
+        else if( tdd_ins )
+          txx_src <= txx_src - 1;
+        //do nothing for TAI
+      end
+      TXXG: begin
+        if( tii_ins | tai_ins)
+          txx_dst <= txx_dst + 1;
+        else if ( tdd_ins )
+          txx_dst <= txx_dst - 1;
+        //do nothing for TIN or TIA
+      end
       default:; //do nothing
     endcase
-  end
+  end // if ( RDY )
+
+always @(posedge clk) // Transfer alternation management
+  if( RDY )
+    casex ( state )
+      TXXA: txx_alt <= 0;
+      TXXG: txx_alt <= (tia_ins | tai_ins) ? ~txx_alt : 0;
+    endcase
   
   
 always @*
