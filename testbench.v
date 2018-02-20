@@ -19,7 +19,8 @@ module tb;
     clk        = 0;
     reset      = 1'b1;
     #10 reset <= 1'b0;
-    #50000 $finish;
+    while(CPU.AB != 16'hbeef) #10 continue;
+    $finish;
   end
 
   initial begin
