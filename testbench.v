@@ -19,7 +19,7 @@ module tb;
     clk        = 0;
     reset      = 1'b1;
     #10 reset <= 1'b0;
-    #10000 $finish;
+    #50000 $finish;
   end
 
   initial begin

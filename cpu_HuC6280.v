@@ -333,7 +333,7 @@ parameter
   TXXE    = 7'd74, //write DST                      
   TXXF    = 7'd75, //modify SRC, LEN--                        
   TXXG    = 7'd76, //modify DST, compare LEN to 0, txx_alt = ~alt
-  TXXH    = 7'd77, //SP->ALU, PC++                            
+  TXXH    = 7'd77, //SP->ALU, SP+1->AB, PC++                            
   TXXI    = 7'd78, //POP X                          
   TXXJ    = 7'd79, //POP A                          
   TXXK    = 7'd80; //POP Y                          
@@ -558,7 +558,10 @@ always @*
         BRK2,
         TXX1,
         TXX2,
-        TXX3:           AB = { STACKPAGE, ADD };
+        TXX3,
+        TXXI,
+        TXXJ,
+        TXXK:           AB = { STACKPAGE, ADD };
         
         INDY1,
         INDX1,
@@ -667,7 +670,9 @@ always @*
          JSR0,
          JSR2, 
          TXX4,
-         TXXC: write_register = 1;
+         TXXC,
+         TXXJ,
+         TXXK:  write_register = 1;
 
        default: write_register = 0;
     endcase
@@ -732,9 +737,16 @@ assign AZ1 = AZ;
  * 
  * Reading directly from the bus can also occur during a transfer
  */
-always @(posedge clk)
+always @(posedge clk) begin
     if( write_register & RDY )
-        AXYS[regsel] <= (state == JSR0 || state == TXXC) ? DIMUX : AO;
+      case ( state )
+        JSR0,
+        TXXC,
+        TXXJ: AXYS[regsel]    <= DIMUX;
+        default: AXYS[regsel] <= AO;
+      endcase
+        //AXYS[regsel] <= (state == JSR0 || state == TXXC || state) ? DIMUX : AO;
+end
 
 /*
  * register select logic. This determines which of the A, X, Y or
@@ -763,13 +775,20 @@ always @*
         RTI3,
         RTS0,
         RTS2,
-        TXX0   : regsel = SEL_S;
+        TXX0,
+        TXX4,
+        TXXH,
+        TXXK   : regsel = SEL_S;
+
         TXX1   : regsel = SEL_Y;
-        TXX2,
+
+        TXX2   : regsel = SEL_A;
+
+        TXX3,
         TXXC,
-        TXXE   : regsel = SEL_A;
-        TXX3   : regsel = SEL_X;
-        TXX4   : regsel = SEL_S;
+        TXXE,
+        TXXJ   : regsel = SEL_X;
+        
         
         default: regsel = src_reg; 
     endcase
@@ -872,11 +891,14 @@ always @*
         INDY1,
         PUSH0,
         PUSH1,
-        TXX0:   AI  = regfile;
+        TXX0,
+        TXXH:   AI  = regfile;
 
         TXX1,
         TXX2,
-        TXX3:   AI  = ADD;
+        TXX3,
+        TXXI,
+        TXXJ:   AI  = ADD;
        
       
         BRA0,
@@ -931,7 +953,11 @@ always @*
          TXX0,
          TXX1,
          TXX2,
-         TXX3:   BI = 8'h00;
+         TXX3,
+         TXXH,
+         TXXI,
+         TXXJ,
+         TXXK:   BI = 8'h00;
 
          READ: begin
            if(txb_ins) BI  = BI_txb;
@@ -979,7 +1005,10 @@ always @*
         RTS0,
         RTS1,
         INDY0,
-        INDX1:  CI = 1; 
+        INDX1,
+        TXXH,
+        TXXI,
+        TXXJ:  CI = 1; 
 
         default:        CI = 0;
     endcase
@@ -1278,7 +1307,10 @@ always @(posedge clk or posedge reset)
         TXXE    : state <= TXXF;  
         TXXF    : state <= TXXG; 
         TXXG    : state <= (txx_len == 0) ? TXXH : TXXB;
-        TXXH    : state <= TXXH; //temporary hack for debug
+        TXXH    : state <= TXXI;
+        TXXI    : state <= TXXJ;
+        TXXJ    : state <= TXXK;
+        TXXK    : state <= FETCH;
     endcase
 
 /*
