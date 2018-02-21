@@ -60,13 +60,14 @@
 //set this to get debugging aids
 `define SIM
 
-module cpu_65c02( clk, reset, AB, DI, DO, WE, IRQ, NMI, RDY );
+module cpu_65c02( clk, reset, AB, DI, DO, RE, WE, IRQ, NMI, RDY );
 
 input clk;              // CPU clock 
 input reset;            // reset signal
 output reg [15:0] AB;   // address bus
 input [7:0] DI;         // data in, read bus
 output [7:0] DO;        // data out, write bus
+output RE;              // read enable
 output WE;              // write enable
 input IRQ;              // interrupt request
 input NMI;              // non-maskable interrupt request
@@ -110,6 +111,7 @@ wire [7:0] DI;          // Data In
 wire [7:0] IR;          // Instruction register
 reg  [7:0] DO;          // Data Out 
 wire [7:0] AO;          // ALU output after BCD adjustment
+reg  RE;                // Read Enable
 reg  WE;                // Write Enable
 reg  CI;                // Carry In
 wire CO;                // Carry Out 
@@ -309,8 +311,8 @@ parameter
          */
   //going to take liberties with bus cycles for now
   BBX0    = 7'd54, // BB{R,S} - fetch ZP data
-  BBX1    = 7'd55, // BB{R,S} - test
-  BBX2    = 7'd56, // BB{R,S} - fetch displacement, PC++
+  BBX1    = 7'd55, // BB{R,S} - test, fetch displacement
+  BBX2    = 7'd56, // BB{R,S} - write displacement to temp, PC++
   BBX3    = 7'd57, // BB{R,S} - add displacement to PC[7:0]
   BBX4    = 7'd58, // BB{R,S} - add carry to PC[15:8]
   BBX5    = 7'd59, // BB{R,S} - set up address bus
@@ -329,11 +331,11 @@ parameter
   TXXA    = 7'd70, //(read finishes), txx_alt = 0
   TXXB    = 7'd71, //setup SRC address               
   TXXC    = 7'd72, //read SRC byte                  
-  TXXD    = 7'd73, //setup DST address              
-  TXXE    = 7'd74, //write DST                      
+  TXXD    = 7'd73, //setup DST address, write back read DATA to X             
+  TXXE    = 7'd74, //write x to DST                      
   TXXF    = 7'd75, //modify SRC, LEN--                        
   TXXG    = 7'd76, //modify DST, compare LEN to 0, txx_alt = ~alt
-  TXXH    = 7'd77, //SP->ALU, SP+1->AB, PC++                            
+  TXXH    = 7'd77, //SP->ALU, PC++                            
   TXXI    = 7'd78, //POP X                          
   TXXJ    = 7'd79, //POP A                          
   TXXK    = 7'd80; //POP Y                          
@@ -577,10 +579,10 @@ always @*
         WRITE:          AB = { ABH, ABL };
 
         TXXB,
-        TXXC:           AB = txx_src + txx_alt;
+        TXXC:           AB = txx_src;
 
         TXXD,
-        TXXE:           AB = txx_dst + txx_alt;
+        TXXE:           AB = txx_dst;
       
       default:          AB = PC;
     endcase
@@ -622,6 +624,88 @@ always @*
       
         default: DO = store_zero ? 0 : regfile;
     endcase
+
+
+/*
+ * Read Enable Generator. Any MMIO issues should be resolved here
+ */
+always @* begin
+  case( state )
+    TXXB, 
+    TXXD,
+    TXXH: RE = 0;
+    default: RE = ~WE;
+  endcase
+  
+  /*
+  case( state )
+
+    INDX3,
+    INDY3,
+    //ABSX2,
+    ABS1,
+    ZPX1,
+    ZP0:    WE   = ~store;
+    
+    ABS0,
+    //ABS1,
+    ABSX0,
+    ABSX1,
+    BRA0,
+    BRA1,
+    BRA2,
+    BRK3,
+    DECODE,
+    FETCH,
+    INDX0,
+    INDX1,
+    INDX2,
+    //INDX3,
+    INDY0,
+    INDY1,
+    INDY2,
+    //INDY3,
+    JMP0, //investigate
+    JMP1,
+    JMPI0,
+    JMPI1,
+    JSR2,
+    JSR3,
+    PULL0,
+    PULL1,
+    PULL2,
+    READ,
+    RTI1,
+    RTI2,
+    RTI3,
+    RTI4,
+    RTS1,
+    RTS2,
+    ZP0,
+    ZPX0,
+    //ZPX1,
+    IND0,
+    JMPIX0,
+    JMPIX1,
+    JMPIX2,
+    BBX0,
+    BBX1,
+    BBX2,
+    TXX4,
+    TXX5,
+    TXX6,
+    TXX7,
+    TXX8,
+    TXX9,
+    TXXC,
+    TXXI,
+    TXXJ,
+    TXXK: RE     = 1;
+
+    default: RE  = 0;
+  endcase
+   */
+end
 
 /*
  * Write Enable Generator
@@ -670,7 +754,7 @@ always @*
          JSR0,
          JSR2, 
          TXX4,
-         TXXC,
+         TXXD,
          TXXJ,
          TXXK:  write_register = 1;
 
@@ -741,7 +825,7 @@ always @(posedge clk) begin
     if( write_register & RDY )
       case ( state )
         JSR0,
-        TXXC,
+        TXXD,
         TXXJ: AXYS[regsel]    <= DIMUX;
         default: AXYS[regsel] <= AO;
       endcase
@@ -785,7 +869,7 @@ always @*
         TXX2   : regsel = SEL_A;
 
         TXX3,
-        TXXC,
+        TXXD,
         TXXE,
         TXXJ   : regsel = SEL_X;
         
@@ -1704,18 +1788,17 @@ always @(posedge clk)
       TXXA: txx_len[15:8] <= DI;
       TXXF: begin
         txx_len <= txx_len - 1; //always decrement the length counter
-        if( tii_ins | tin_ins | tia_ins )
+        if( tii_ins | tin_ins | tia_ins | (tai_ins & ~txx_alt) )
           txx_src <= txx_src + 1;
-        else if( tdd_ins )
+        else if( tdd_ins | (tai_ins & txx_alt) )
           txx_src <= txx_src - 1;
-        //do nothing for TAI
       end
       TXXG: begin
-        if( tii_ins | tai_ins)
+        if( tii_ins | tai_ins | (tia_ins & ~txx_alt) )
           txx_dst <= txx_dst + 1;
-        else if ( tdd_ins )
+        else if ( tdd_ins | (tia_ins & txx_alt) )
           txx_dst <= txx_dst - 1;
-        //do nothing for TIN or TIA
+        //do nothing for TIN
       end
       default:; //do nothing
     endcase

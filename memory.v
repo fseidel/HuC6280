@@ -6,7 +6,7 @@
 module memory(input wire [15:0] addr,
               input wire [7:0]  dIn,
               output reg [7:0] dOut,
-              input wire        we, clk);
+              input wire       re, we, clk);
   
   reg [7:0]                    mem[2**16-1:0];
   
@@ -16,8 +16,9 @@ module memory(input wire [15:0] addr,
 
   
   always @(posedge clk) begin
+    //if(re & we) $display("ERROR! RE AND WE ASSERTED");
     if(we) mem[addr] <= dIn;
-    dOut <= mem[addr]; 
+    else if(re) dOut <= mem[addr]; 
   end
 
   
