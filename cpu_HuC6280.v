@@ -60,23 +60,44 @@
 //set this to get debugging aids
 `define SIM
 
-module cpu_65c02( clk, reset, AB, DI, DO, RE, WE, IRQ, NMI, RDY );
+module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ, NMI, RDY );
 
 input clk;              // CPU clock 
 input reset;            // reset signal
-output reg [15:0] AB;   // address bus
+output reg [20:0] AB_21;// address bus (post-MMU)
 input [7:0] DI;         // data in, read bus
 output [7:0] DO;        // data out, write bus
 output RE;              // read enable
 output WE;              // write enable
 input IRQ;              // interrupt request
 input NMI;              // non-maskable interrupt request
-input RDY;              // Ready signal. Pauses CPU when RDY=0 
+input RDY;              // Ready signal. Pauses CPU when RDY=0
+
+  /* //TODO: enable these
+output CE_n;
+output CER_n;
+output CE7_n;
+output CEK_n;
+output CEP_n;
+output CET_n;
+output CEIO_n;
+output CECG_n;
+   */
+
+wire CE_n;
+wire CER_n;
+wire CE7_n;
+wire CEK_n;
+wire CEP_n;
+wire CET_n;
+wire CEIO_n;
+wire CECG_n;
+  
 
 /*
  * internal signals
  */
-
+reg  [15:0] AB;         // Address bus (pre-MMU)
 reg  [15:0] PC;         // Program Counter 
 reg  [7:0] ABL;         // Address Bus Register LSB
 reg  [7:0] ABH;         // Address Bus Register MSB
@@ -338,7 +359,12 @@ parameter
   TXXH    = 7'd77, //SP->ALU, PC++                            
   TXXI    = 7'd78, //POP X                          
   TXXJ    = 7'd79, //POP A                          
-  TXXK    = 7'd80; //POP Y                          
+  TXXK    = 7'd80, //POP Y
+  TAM0    = 7'd81, //issue load request to MMU
+  TAM1    = 7'd82, //wait for MMU update
+  TAM2    = 7'd83, //keep waiting
+  TMA0    = 7'd84, //issue store request to MMU
+  TMA1    = 7'd85; //get result
 
 `ifdef SIM
 
@@ -430,14 +456,17 @@ always @*
       TXXI:   statename  = "TXXI";
       TXXJ:   statename  = "TXXJ";
       TXXK:   statename  = "TXXK";
+      TAM0:   statename  = "TAM0";
+      TAM1:   statename  = "TAM1";
+      TAM2:   statename  = "TAM2";
+      TMA0:   statename  = "TMA0";
+      TMA1:   statename  = "TMA1";
     endcase
 
 //always @( PC )
 //      $display( "%t, PC:%04x IR:%02x A:%02x X:%02x Y:%02x S:%02x C:%d Z:%d V:%d N:%d P:%02x", $time, PC, IR, A, X, Y, S, C, Z, V, N, P );
 
 `endif
-
-
 
 /*
  * Program Counter Increment/Load. First calculate the base value in
@@ -516,6 +545,33 @@ always @(posedge clk)
     if( RDY )
         PC <= PC_temp + PC_inc;
 
+  /*
+   * MMU
+   */
+  reg MMU_tam, MMU_tma;
+  reg  [2:0] STx_override;
+  wire [7:0] MMU_out;
+
+  assign STx_override = 3'b000;
+  
+  MMU mmu(.clk, .reset, .RDY, .load_en(MMU_tam), .store_en(MMU_tma),
+          .MPR_mask(DI), .d_in(regfile), .VADDR(AB), .STx_override,
+          .PADDR(AB_21), .d_out(MMU_out),
+          .CE7_n, .CEK_n, .CEP_n, .CET_n, .CEIO_n, .CECG_n, .CE_n, .CER_n);
+
+  always @* begin
+    case( state )
+      TAM0: MMU_tam = 1;
+      TMA0: MMU_tma = 1;
+      default: begin
+        MMU_tam = 0;
+        MMU_tma = 0;
+      end
+    endcase
+  end
+
+  
+  
 /*
  * Address Generator 
  */
@@ -756,7 +812,8 @@ always @*
          TXX4,
          TXXD,
          TXXJ,
-         TXXK:  write_register = 1;
+         TXXK,
+         TMA1:  write_register = 1;
 
        default: write_register = 0;
     endcase
@@ -827,6 +884,7 @@ always @(posedge clk) begin
         JSR0,
         TXXD,
         TXXJ: AXYS[regsel]    <= DIMUX;
+        TMA1: AXYS[regsel]    <= MMU_out;
         default: AXYS[regsel] <= AO;
       endcase
         //AXYS[regsel] <= (state == JSR0 || state == TXXC || state) ? DIMUX : AO;
@@ -1259,6 +1317,8 @@ always @(posedge clk or posedge reset)
                 //7 column is now RMB/SMB
                 //F column is now BBR/BBS
                 //3 column is many things
+                8'b0100_0011:   state <= TMA0;
+                8'b0101_0011:   state <= TAM0;       
                 8'b0111_0011:   state <= TXX0;  // TII
                 8'b11xx_0011:   state <= TXX0;  // TDD, TIN, TIA, TAI
 `ifdef IMPLEMENT_NOPS 
@@ -1395,6 +1455,11 @@ always @(posedge clk or posedge reset)
         TXXI    : state <= TXXJ;
         TXXJ    : state <= TXXK;
         TXXK    : state <= FETCH;
+        TAM0    : state <= TAM1;
+        TAM1    : state <= TAM2;
+        TAM2    : state <= FETCH;
+        TMA0    : state <= TMA1;
+        TMA1    : state <= FETCH;
     endcase
 
 /*
@@ -1731,6 +1796,18 @@ always @*
       8'b11xx_0011: txx_ins = 1;
       default: txx_ins = 0;
     endcase
+
+  /* TODO: WTF
+always @* begin //TODO: actually implement this
+  STx_override = 3'b000;
+  casex( IR )
+    //8'b000x_0011,    //ST0, ST1
+    //8'b0010_0011: STx_override = 1; //ST2;
+    //default:      STx_override = 3'b000;
+  endcase
+end
+   */
+  
   
 always @(posedge clk )
      if( state == DECODE && RDY )

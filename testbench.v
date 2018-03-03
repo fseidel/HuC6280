@@ -2,12 +2,12 @@
 
 module tb;
   reg clk, reset;
-  wire [15:0] AB;
+  wire [20:0] AB_21;
   wire [7:0]  DI, DO;
   wire        RE, WE, IRQ, NMI, RDY;
   
-  cpu_65c02 CPU(.*);
-  memory mem(.clk, .re(RE), .we(WE), .addr(AB), .dIn(DO), .dOut(DI));
+  cpu_HuC6280 CPU(.*);
+  memory mem(.clk, .re(RE), .we(WE), .addr(AB_21), .dIn(DO), .dOut(DI));
 
   assign IRQ  = 1'b0;
   assign NMI  = 1'b0;
@@ -16,12 +16,16 @@ module tb;
   initial begin
     /*$monitor("AB: %x, DI: %x, PC: %x, State: %s, A: %x, X: %x, Y: %x, S: %x",
              CPU.AB, CPU.DI, CPU.PC, CPU.statename, CPU.A, CPU.X, CPU.Y, CPU.S);*/
-    $monitor("AB: %x, PC: %x, State: %s", CPU.AB, CPU.PC, CPU.statename);
-    clk           = 0;
-    reset         = 1'b1;
-    #10 reset    <= 1'b0;
+    $monitor("AB_21: %x, AB: %x, DI %x, PC: %x, State: %s, MMU_out: %x",
+             AB_21, CPU.AB, CPU.DI, CPU.PC, CPU.statename, CPU.MMU_out);
+    clk        = 0;
+    reset      = 1'b1;
+    #10 reset <= 1'b0;
+    //#10000 $finish;
     while(CPU.AB != 16'hbeef || ~RE) #10 continue;
-    $finish;
+    $display("A: %x, X: %x, Y: %x, S: %x",
+             CPU.A, CPU.X, CPU.Y, CPU.S);
+    #10 $finish;
     //#50000 $finish;
   end
 

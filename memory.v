@@ -3,7 +3,7 @@
 `default_nettype none
 
 
-module memory(input wire [15:0] addr,
+module memory(input wire [20:0] addr,
               input wire [7:0]  dIn,
               output reg [7:0] dOut,
               input wire       re, we, clk);
@@ -17,8 +17,10 @@ module memory(input wire [15:0] addr,
   
   always @(posedge clk) begin
     //if(re & we) $display("ERROR! RE AND WE ASSERTED");
-    if(we) mem[addr] <= dIn;
-    else if(re) dOut <= mem[addr]; 
+    if(addr < 21'h1F0000) begin
+      if(we) mem[addr] <= dIn;
+      else if(re) dOut <= mem[addr];
+    end
   end
 
   
