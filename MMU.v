@@ -25,7 +25,7 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
   reg STx_addr;
   always @* begin
     unique case(STx_override)
-      3'b000: STx_addr  = 21'hxxxxxx; //don't care, we don't need it
+      3'b000: STx_addr  = 21'hxxxxxx; //0 is valid, but we don't care
       3'b001: STx_addr  = 21'h1FE000;
       3'b010: STx_addr  = 21'h1FE002;
       3'b100: STx_addr  = 21'h1FE003;
@@ -82,7 +82,7 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
             state     <= STORE;
           end
         end
-        LOAD: begin
+        LOAD: begin //handle each bit in the mask, as we can set multiple
           if(localmask[0]) MPR[0] <= databuf;
           if(localmask[1]) MPR[1] <= databuf;
           if(localmask[2]) MPR[2] <= databuf;
