@@ -14,10 +14,12 @@ module tb;
   assign RDY = 1'b1;
 
   initial begin
-    /*$monitor("AB: %x, DI: %x, PC: %x, State: %s, A: %x, X: %x, Y: %x, S: %x",
+    /*$monitor("AB: %x, DI: %x, PC: %x, State: %s, ,
              CPU.AB, CPU.DI, CPU.PC, CPU.statename, CPU.A, CPU.X, CPU.Y, CPU.S);*/
-    $monitor("AB_21: %x, AB: %x, DI %x, PC: %x, State: %s, MMU_out: %x",
-             AB_21, CPU.AB, CPU.DI, CPU.PC, CPU.statename, CPU.MMU_out);
+    $monitor({"AB_21: %x, AB: %x, DI %x, PC: %x, State: %s, MMU_out: %x\n",
+              "A: %x, X: %x, Y: %x, S: %x"},
+             AB_21, CPU.AB, CPU.DI, CPU.PC, CPU.statename, CPU.MMU_out,
+             CPU.A, CPU.X, CPU.Y, CPU.S);
     clk        = 0;
     reset      = 1'b1;
     #10 reset <= 1'b0;

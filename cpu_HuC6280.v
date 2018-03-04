@@ -224,6 +224,8 @@ reg tdd_ins;            // doing TDD instruction
 reg tin_ins;            // doing TIN instruction
 reg tia_ins;            // doing TIA instruction
 reg tai_ins;            // doing TAI instruction
+reg swp_ins;            // doing SXY, SAX, SAY instruction
+reg sax_ins;            // doing SAX instruction
   
 reg plp;                // doing PLP instruction
 reg php;                // doing PHP instruction 
@@ -364,7 +366,8 @@ parameter
   TAM1    = 7'd82, //wait for MMU update
   TAM2    = 7'd83, //keep waiting
   TMA0    = 7'd84, //issue store request to MMU
-  TMA1    = 7'd85; //get result
+  TMA1    = 7'd85, //get result
+  SWP     = 7'd86; //S{AX,AY,XY}
 
 `ifdef SIM
 
@@ -394,7 +397,7 @@ always @*
       INDY1:  statename  = "INDY1";
       INDY2:  statename  = "INDY2";
       INDY3:  statename  = "INDY3";
-      READ:  statename   = "READ";
+      READ:   statename  = "READ";
       WRITE:  statename  = "WRITE";
       FETCH:  statename  = "FETCH";
       PUSH0:  statename  = "PUSH0";
@@ -461,6 +464,7 @@ always @*
       TAM2:   statename  = "TAM2";
       TMA0:   statename  = "TMA0";
       TMA1:   statename  = "TMA1";
+      SWP:    statename  = "SWP";
     endcase
 
 //always @( PC )
@@ -496,7 +500,7 @@ always @*
 
         BRK2:           PC_temp =      res ? 16'hfffc : 
                                   NMI_edge ? 16'hfffa : 16'hfffe;
-
+      
         default:        PC_temp = PC;
     endcase
 
@@ -504,7 +508,7 @@ always @*
  * Determine wether we need PC_temp, or PC_temp + 1
  */
 always @*
-    case( state )
+    case( state ) //TODO: do txx crap with AB, not PC
         DECODE:         if( (~I & IRQ) | NMI_edge | txx_ins)
                             PC_inc = 0;
                         else
@@ -632,7 +636,8 @@ always @*
 
         REG,
         READ,
-        WRITE:          AB = { ABH, ABL };
+        WRITE,
+        SWP  :          AB = { ABH, ABL };
 
         TXXB,
         TXXC:           AB = txx_src;
@@ -813,9 +818,11 @@ always @*
          TXXD,
          TXXJ,
          TXXK,
-         TMA1:  write_register = 1;
+         TMA1:  write_register  = 1;
 
-       default: write_register = 0;
+         REG:   write_register  = swp_ins; //write back if we're swapping
+
+      default: write_register   = 0;
     endcase
 
 /*
@@ -931,7 +938,7 @@ always @*
         TXXE,
         TXXJ   : regsel = SEL_X;
         
-        
+        SWP    : regsel = (sax_ins) ? SEL_X : SEL_Y;
         default: regsel = src_reg; 
     endcase
 
@@ -1048,15 +1055,17 @@ always @*
         BBX1:   AI  = DIMUX;
         
 
-        BRA1:   AI      = ABH;       // don't use PCH in case we're 
+        BRA1:   AI  = ABH;       // don't use PCH in case we're 
 
-        FETCH:  AI      = load_only ? 0 : regfile;
+        FETCH:  AI  = load_only ? 0 : regfile;
 
         DECODE,
         ABS1:   AI = 8'hxx;     // don't care
 
         BBX3:   AI = bbx_disp;
         BBX4:   AI = PCH;
+
+        SWP:    AI = regfile;
       
         default:  AI = 0;
     endcase
@@ -1099,7 +1108,8 @@ always @*
          TXXH,
          TXXI,
          TXXJ,
-         TXXK:   BI = 8'h00;
+         TXXK,
+         SWP:   BI = 8'h00;
 
          READ: begin
            if(txb_ins) BI  = BI_txb;
@@ -1114,7 +1124,7 @@ always @*
          ABS1:  BI  = 8'hxx;
       
          BBX1:  BI  = BI_xmb;
-           
+      
          default:       BI = DIMUX;
     endcase
 
@@ -1319,8 +1329,10 @@ always @(posedge clk or posedge reset)
                 //3 column is many things
                 8'b0100_0011:   state <= TMA0;
                 8'b0101_0011:   state <= TAM0;       
-                8'b0111_0011:   state <= TXX0;  // TII
+                8'b0111_0011,                   // TII
                 8'b11xx_0011:   state <= TXX0;  // TDD, TIN, TIA, TAI
+                8'b0x00_0010,
+                8'b0010_0010:   state <= SWP;
 `ifdef IMPLEMENT_NOPS 
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column 
@@ -1460,6 +1472,8 @@ always @(posedge clk or posedge reset)
         TAM2    : state <= FETCH;
         TMA0    : state <= TMA1;
         TMA1    : state <= FETCH;
+      
+        SWP     : state <= REG;
     endcase
 
 /*
@@ -1486,7 +1500,9 @@ always @(posedge clk)
                 8'b1100_1010,   // DEX
                 8'b11x1_1010,   // PHX, PLX
                 8'b1x1x_xx01,   // LDA, SBC
-                8'bxxx0_1000:   // PHP, PLP, PHA, PLA, DEY, TAY, INY, INX
+                8'bxxx0_1000,   // PHP, PLP, PHA, PLA, DEY, TAY, INY, INX
+                8'b0x00_0010,   // SXY, SAY
+                8'b0010_0010:   // SAX
                                 load_reg <= 1;
 
                 default:        load_reg <= 0;
@@ -1500,7 +1516,8 @@ always @(posedge clk)
                 8'b1111_1010,   // PLX
                 8'b1010_0010,   // LDX imm
                 8'b101x_x110,   // LDX
-                8'b101x_1x10:   // LDX, TAX, TSX
+                8'b101x_1x10,   // LDX, TAX, TSX
+                8'b0010_0010:   // SAX
                                 dst_reg <= SEL_X;
 
                 8'b0x00_1000,   // PHP, PHA
@@ -1511,7 +1528,8 @@ always @(posedge clk)
                 8'b1x00_1000,   // DEY, DEX
                 8'b0111_1010,   // PLY
                 8'b101x_x100,   // LDY
-                8'b1010_x000:   // LDY #imm, TAY
+                8'b1010_x000,   // LDY #imm, TAY
+                8'b0x00_0010:   // SXY, SAY
                                 dst_reg <= SEL_Y;
 
                 default:        dst_reg <= SEL_A;
@@ -1527,7 +1545,8 @@ always @(posedge clk)
                 8'b100x_1x10,   // TXA, TXS
                 8'b1110_xx00,   // INX, CPX
                 8'b1101_1010,   // PHX
-                8'b1100_1010:   // DEX
+                8'b1100_1010,   // DEX
+                8'b0000_0010:   // SXY
                                 src_reg <= SEL_X; 
 
                 8'b100x_x100,   // STY
@@ -1779,14 +1798,23 @@ always @(posedge clk )
         endcase
 
 always @(posedge clk ) // Transfer instructions
-     if( state == DECODE && RDY )
+     if( state == DECODE && RDY ) begin
+        {tii_ins, tdd_ins, tin_ins, tia_ins, tai_ins} <= 0;
         casex( IR )
           8'b0111_0011: tii_ins <= 1; //TII
           8'b1100_0011: tdd_ins <= 1; //TDD
           8'b1101_0011: tin_ins <= 1; //TIN
           8'b1110_0011: tia_ins <= 1; //TIA
           8'b1111_0011: tai_ins <= 1; //TAI
-          default: {tii_ins, tdd_ins, tin_ins, tia_ins, tai_ins} <= 0;
+        endcase
+     end
+
+always @(posedge clk ) // Swap instructions
+     if( state == DECODE && RDY )
+        casex( IR )
+          8'b0x00_0010: {sax_ins, swp_ins} <= 2'b01; //SXY, SAY
+          8'b0010_0010: {sax_ins, swp_ins} <= 2'b11;
+          default: {swp_ins, sax_ins} <= 0;
         endcase
 
 always @*
