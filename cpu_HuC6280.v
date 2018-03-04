@@ -226,6 +226,7 @@ reg tia_ins;            // doing TIA instruction
 reg tai_ins;            // doing TAI instruction
 reg swp_ins;            // doing SXY, SAX, SAY instruction
 reg sax_ins;            // doing SAX instruction
+reg clr_ins;            // doing CLA/CLX/CLY instruction
   
 reg plp;                // doing PLP instruction
 reg php;                // doing PHP instruction 
@@ -1026,7 +1027,6 @@ always @*
         BRK2,
         INDX1:  AI = ADD;
 
-        REG,
         ZPX0,
         INDX0,
         JMPIX0,
@@ -1066,6 +1066,8 @@ always @*
         BBX4:   AI = PCH;
 
         SWP:    AI = regfile;
+
+        REG:    AI = clr_ins ? 0 : regfile;
       
         default:  AI = 0;
     endcase
@@ -1333,6 +1335,9 @@ always @(posedge clk or posedge reset)
                 8'b11xx_0011:   state <= TXX0;  // TDD, TIN, TIA, TAI
                 8'b0x00_0010,
                 8'b0010_0010:   state <= SWP;
+                8'b0110_0010,                   // CLA
+                8'b1x00_0010:   state <= REG;   // CLX, CLY
+                  
 `ifdef IMPLEMENT_NOPS 
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column 
@@ -1502,7 +1507,9 @@ always @(posedge clk)
                 8'b1x1x_xx01,   // LDA, SBC
                 8'bxxx0_1000,   // PHP, PLP, PHA, PLA, DEY, TAY, INY, INX
                 8'b0x00_0010,   // SXY, SAY
-                8'b0010_0010:   // SAX
+                8'b0010_0010,   // SAX
+                8'b0110_0010,   // CLA
+                8'b1x00_0010:   // CLX, CLY
                                 load_reg <= 1;
 
                 default:        load_reg <= 0;
@@ -1517,7 +1524,8 @@ always @(posedge clk)
                 8'b1010_0010,   // LDX imm
                 8'b101x_x110,   // LDX
                 8'b101x_1x10,   // LDX, TAX, TSX
-                8'b0010_0010:   // SAX
+                8'b0010_0010,   // SAX
+                8'b1000_0010:   // CLX
                                 dst_reg <= SEL_X;
 
                 8'b0x00_1000,   // PHP, PHA
@@ -1529,7 +1537,8 @@ always @(posedge clk)
                 8'b0111_1010,   // PLY
                 8'b101x_x100,   // LDY
                 8'b1010_x000,   // LDY #imm, TAY
-                8'b0x00_0010:   // SXY, SAY
+                8'b0x00_0010,   // SXY, SAY
+                8'b1100_0010:   // CLY
                                 dst_reg <= SEL_Y;
 
                 default:        dst_reg <= SEL_A;
@@ -1817,6 +1826,15 @@ always @(posedge clk ) // Swap instructions
           default: {swp_ins, sax_ins} <= 0;
         endcase
 
+always @(posedge clk ) //Clear instructions
+     if( state == DECODE && RDY )
+        casex( IR )
+                8'b0110_0010,   // CLA
+                8'b1x00_0010:   // CLX, CLY
+                                clr_ins <= 1;
+                default:        clr_ins <= 0;
+        endcase
+  
 always @*
   if( state == DECODE ) // fseidel: RDY shouldn't be necessary here
     casex( IR )
