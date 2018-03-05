@@ -10,27 +10,17 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
            input wire [7:0]  MPR_mask, //MPR(s) we wish to operate on
            input wire [7:0]  d_in, //data to transfer to MPRs
            input wire [15:0] VADDR, //virtual address to translate
-           input wire [2:0]  STx_override, //ST{0,1,2} mapping override signal
+           input wire        STx_override, //ST{0,1,2} mapping override signal
            output reg [20:0] PADDR, //physical address output
            output reg [7:0]  d_out, //data out for reading from MPR
-           output wire       CE7_n,  CEK_n, //VDC, VCE chip enable
-           output wire       CEP_n,  CET_n, //PSG, Timer chip enable
+           output wire       CE7_n, CEK_n, //VDC, VCE chip enable
+           output wire       CEP_n, CET_n, //PSG, Timer chip enable
            output wire       CEIO_n, CECG_n, //IO, Interrupt chip enable
-           output wire       CE_n,   CER_n); //ROM, RAM chip enable
+           output wire       CE_n, CER_n); //ROM, RAM chip enable
 
   reg [7:0][7:0] MPR; //the memory paging register file
   reg [7:0]      databuf; //data for transfer from MPRs
   reg [7:0]      localmask; //a copy of the mask  
-
-  reg STx_addr;
-  always @* begin
-    unique case(STx_override)
-      3'b000: STx_addr  = 21'hxxxxxx; //0 is valid, but we don't care
-      3'b001: STx_addr  = 21'h1FE000;
-      3'b010: STx_addr  = 21'h1FE002;
-      3'b100: STx_addr  = 21'h1FE003;
-    endcase
-  end  
 
   assign CE_n   = !(PADDR <= 21'h001FFF);
   assign CER_n  = !(PADDR >= 21'h1F0000 && PADDR <= 21'h1F1FFF);
@@ -41,7 +31,8 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
   assign CEIO_n = !(PADDR >= 21'h1FF000 && PADDR <= 21'h1FF3FF);
   assign CECG_n = !(PADDR >= 21'h1FF400 && PADDR <= 21'h1FF7FF);
   
-  assign PADDR = (STx_override) ? STx_addr : 
+  assign PADDR = (STx_override) ? 
+                 (21'h1FE000 | VADDR[1:0]) : 
                  {MPR[VADDR[15:13]], VADDR[12:0]};
   
   enum logic [1:0] {IDLE, LOAD, STORE} state;

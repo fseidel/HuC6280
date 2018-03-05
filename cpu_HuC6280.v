@@ -60,7 +60,8 @@
 //set this to get debugging aids
 `define SIM
 
-module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ, NMI, RDY );
+module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1, IRQ2, TIMER, NMI, 
+                    RDY );
 
 input clk;              // CPU clock 
 input reset;            // reset signal
@@ -69,9 +70,15 @@ input [7:0] DI;         // data in, read bus
 output [7:0] DO;        // data out, write bus
 output RE;              // read enable
 output WE;              // write enable
-input IRQ;              // interrupt request
+input IRQ1;             // interrupt request 1
+input IRQ2;             // interrupt request 2
+input TIMER;            // timer interrupt request
 input NMI;              // non-maskable interrupt request
 input RDY;              // Ready signal. Pauses CPU when RDY=0
+
+wire IRQ;
+assign IRQ = IRQ1 | IRQ2 | TIMER;
+
 
   /* //TODO: enable these
 output CE_n;
@@ -141,6 +148,7 @@ wire [7:0] PCL       = PC[7:0];
   
 reg        bbx_status;    // a cheap hack to make my life easier (fseidel)
 reg [7:0]  bbx_disp;      // ditto
+reg [7:0]  tst_mask;       // I'm starting to think these aren't hacks
   
 reg        NMI_edge  = 0;       // captured NMI edge
 
@@ -227,6 +235,8 @@ reg tai_ins;            // doing TAI instruction
 reg swp_ins;            // doing SXY, SAX, SAY instruction
 reg sax_ins;            // doing SAX instruction
 reg clr_ins;            // doing CLA/CLX/CLY instruction
+reg tst_ins;            // doing TST instruction
+reg tst_x;              // TST instruction is x-relative
   
 reg plp;                // doing PLP instruction
 reg php;                // doing PHP instruction 
@@ -333,15 +343,15 @@ parameter
     BBX4   = 7'd58, // BB{R,S} - add displacement to PC[7:0] (PC++????)
     BBX5   = 7'd59; // BB{R,S} - add carry to PC[15:8], goto fetch
          */
-  //going to take liberties with bus cycles for now
+         //going to take liberties with bus cycles for now
   BBX0    = 7'd54, // BB{R,S} - fetch ZP data
   BBX1    = 7'd55, // BB{R,S} - test, fetch displacement
   BBX2    = 7'd56, // BB{R,S} - write displacement to temp, PC++
   BBX3    = 7'd57, // BB{R,S} - add displacement to PC[7:0]
   BBX4    = 7'd58, // BB{R,S} - add carry to PC[15:8]
   BBX5    = 7'd59, // BB{R,S} - set up address bus
-
-  //TXX - transfer instructions
+         
+         //TXX - transfer instructions
   TXX0    = 7'd60, //SP->ALU
   TXX1    = 7'd61, //PUSH Y
   TXX2    = 7'd62, //PUSH A
@@ -368,8 +378,21 @@ parameter
   TAM2    = 7'd83, //keep waiting
   TMA0    = 7'd84, //issue store request to MMU
   TMA1    = 7'd85, //get result
-  SWP     = 7'd86; //S{AX,AY,XY}
 
+  SWP     = 7'd86, //S{AX,AY,XY}
+  IMZP0   = 7'd87, //fetch zp offset
+  IMZP1   = 7'd88, //add offset to X or 0
+  IMZP2   = 7'd89, //wait
+  IMZP3   = 7'd90, //wait (this and next line are SWAPPED on real CPU)
+  IMZP4   = 7'd91, //read zp byte
+  IMAB0   = 7'd92, //TODO: these are completely useless
+  IMAB1   = 7'd93,
+  IMAB2   = 7'd94,
+  IMAB3   = 7'd95,
+  IMAB4   = 7'd96,
+  IMAB5   = 7'd97,
+  CSX0    = 7'd98,
+  CSX1    = 7'd99;
 `ifdef SIM
 
 /*
@@ -466,6 +489,19 @@ always @*
       TMA0:   statename  = "TMA0";
       TMA1:   statename  = "TMA1";
       SWP:    statename  = "SWP";
+      IMZP0:  statename  = "IMZP0";
+      IMZP1:  statename  = "IMZP1";
+      IMZP2:  statename  = "IMZP2";
+      IMZP3:  statename  = "IMZP3";
+      IMZP4:  statename  = "IMZP4";
+      IMAB0:  statename  = "IMAB0";
+      IMAB1:  statename  = "IMAB1";
+      IMAB2:  statename  = "IMAB2";
+      IMAB3:  statename  = "IMAB3";
+      IMAB4:  statename  = "IMAB4";
+      IMAB5:  statename  = "IMAB5";
+      CSX0:   statename  = "CSX0";
+      CSX1:   statename  = "CSX1";
     endcase
 
 //always @( PC )
@@ -499,8 +535,10 @@ always @*
         BRA2,
         BBX5:           PC_temp = { ADD, PCL };
 
-        BRK2:           PC_temp =      res ? 16'hfffc : 
-                                  NMI_edge ? 16'hfffa : 16'hfffe;
+        BRK2:           PC_temp = res      ? 16'hfffe : //IRQ2 and BRK
+                                  NMI_edge ? 16'hfffc : //share a vector
+                                  TIMER    ? 16'hfffa : 
+                                  IRQ1     ? 16'hfff8 : 16'hfff6; 
       
         default:        PC_temp = PC;
     endcase
@@ -533,7 +571,10 @@ always @*
         TXX6,
         TXX7,
         TXX8,
-        TXXH:           PC_inc = 1;
+        TXXH,
+        IMZP0,
+        IMAB0,
+        IMAB1:          PC_inc = 1;
 
         JMPIX1:         PC_inc = ~CO;       // Don't increment PC if we are 
                                             // going to go through JMPIX2
@@ -554,10 +595,10 @@ always @(posedge clk)
    * MMU
    */
   reg MMU_tam, MMU_tma;
-  reg  [2:0] STx_override;
+  reg  STx_override;
   wire [7:0] MMU_out;
 
-  assign STx_override = 3'b000;
+  assign STx_override = 0;
   
   MMU mmu(.clk, .reset, .RDY, .load_en(MMU_tam), .store_en(MMU_tma),
           .MPR_mask(DI), .d_in(regfile), .VADDR(AB), .STx_override,
@@ -582,8 +623,8 @@ always @(posedge clk)
  */
 
 parameter
-        ZEROPAGE  = 8'h00,
-        STACKPAGE = 8'h01;
+        ZEROPAGE  = 8'h20,
+        STACKPAGE = 8'h21;
 
 always @*
     case( state )
@@ -629,7 +670,8 @@ always @*
         INDY1,
         INDX1,
         ZPX1,
-        INDX2:          AB = { ZEROPAGE, ADD };
+        INDX2,
+        IMZP4:          AB = { ZEROPAGE, ADD };
 
         ZP0,
         INDY0,
@@ -638,7 +680,9 @@ always @*
         REG,
         READ,
         WRITE,
-        SWP  :          AB = { ABH, ABL };
+        SWP,
+        CSX0,
+        CSX1:           AB = { ABH, ABL };
 
         TXXB,
         TXXC:           AB = txx_src;
@@ -785,7 +829,7 @@ always @*
         TXX1,
         TXX2,
         TXX3,
-        TXXE:   WE = 1;
+        TXXE:    WE = 1;
 
         INDX3,  // only if doing a STA, STX or STY
         INDY3,
@@ -937,7 +981,8 @@ always @*
         TXX3,
         TXXD,
         TXXE,
-        TXXJ   : regsel = SEL_X;
+        TXXJ,
+        IMZP1  : regsel = SEL_X;
         
         SWP    : regsel = (sax_ins) ? SEL_X : SEL_Y;
         default: regsel = src_reg; 
@@ -1047,7 +1092,10 @@ always @*
         TXX2,
         TXX3,
         TXXI,
-        TXXJ:   AI  = ADD;
+        TXXJ,
+        IMZP2,
+        IMZP3,
+        IMZP4:   AI  = ADD;
        
       
         BRA0,
@@ -1057,7 +1105,7 @@ always @*
 
         BRA1:   AI  = ABH;       // don't use PCH in case we're 
 
-        FETCH:  AI  = load_only ? 0 : regfile;
+        FETCH:  AI  = load_only ? 0 : tst_ins ? tst_mask : regfile;
 
         DECODE,
         ABS1:   AI = 8'hxx;     // don't care
@@ -1068,6 +1116,8 @@ always @*
         SWP:    AI = regfile;
 
         REG:    AI = clr_ins ? 0 : regfile;
+
+        IMZP1:  AI = tst_x ? regfile : 0;
       
         default:  AI = 0;
     endcase
@@ -1111,7 +1161,10 @@ always @*
          TXXI,
          TXXJ,
          TXXK,
-         SWP:   BI = 8'h00;
+         SWP,
+         IMZP2,
+         IMZP3,
+         IMZP4:   BI = 8'h00;
 
          READ: begin
            if(txb_ins) BI  = BI_txb;
@@ -1337,7 +1390,8 @@ always @(posedge clk or posedge reset)
                 8'b0010_0010:   state <= SWP;
                 8'b0110_0010,                   // CLA
                 8'b1x00_0010:   state <= REG;   // CLX, CLY
-                  
+                8'b10x0_0011:   state <= IMZP0; // TST imzp, imzpx
+                8'bx101_0100:   state <= CSX0;  // CSL, CSH
 `ifdef IMPLEMENT_NOPS 
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column 
@@ -1479,6 +1533,22 @@ always @(posedge clk or posedge reset)
         TMA1    : state <= FETCH;
       
         SWP     : state <= REG;
+                     
+        IMZP0   : state <= IMZP1;
+        IMZP1   : state <= IMZP2;
+        IMZP2   : state <= IMZP3;
+        IMZP3   : state <= IMZP4;
+        IMZP4   : state <= FETCH;
+
+        IMAB0   : state <= IMAB1;
+        IMAB1   : state <= IMAB2;
+        IMAB2   : state <= IMAB3;
+        IMAB3   : state <= IMAB4;
+        IMAB4   : state <= IMAB5;
+        IMAB5   : state <= FETCH;
+
+        CSX0    : state <= CSX1;
+        CSX1    : state <= REG;
     endcase
 
 /*
@@ -1610,6 +1680,7 @@ always @(posedge clk )
 always @(posedge clk )
      if( state == DECODE && RDY )
         casex( IR )
+                8'b10xx_0011:   load_only <= 0; //TST
                 8'b101x_xxxx:   // LDA, LDX, LDY
                                 load_only <= 1;
                 default:        load_only <= 0;
@@ -1705,7 +1776,8 @@ always @(posedge clk )
                                 op <= OP_ROL;
 
                 8'b1000_1001,   // BIT imm
-                8'b001x_x100:   // BIT zp/abs/zpx/absx
+                8'b001x_x100,   // BIT zp/abs/zpx/absx
+                8'b10xx_0011:   // TST imzp/imzpx/imab/imabx
                                 op <= OP_AND;
 
                 8'b01xx_x110,   // ROR, LSR
@@ -1733,7 +1805,8 @@ always @(posedge clk )
 always @(posedge clk )
      if( state == DECODE && RDY )
         casex( IR )
-                8'b001x_x100:   // BIT zp/abs/zpx/absx (update N,V,Z)
+                8'b001x_x100,   // BIT zp/abs/zpx/absx (update N,V,Z)
+                8'b10xx_0011:   // TST imzp/imzpx/imab/imabx
                                 {bit_ins, bit_ins_nv}  <= 2'b11;
 
                 8'b1000_1001:   // BIT imm (update Z)
@@ -1834,6 +1907,14 @@ always @(posedge clk ) //Clear instructions
                                 clr_ins <= 1;
                 default:        clr_ins <= 0;
         endcase
+
+always @(posedge clk ) //TST instructions
+     if( state == DECODE && RDY )
+        casex( IR )
+                8'b100x_0011: {tst_x, tst_ins} <= 2'b01; // TST {im,ab}zp
+                8'b101x_0011: {tst_x, tst_ins} <= 2'b11; // TST {im,ab}zpx
+                default:      {tst_x, tst_ins} <= 2'b00;
+        endcase
   
 always @*
   if( state == DECODE ) // fseidel: RDY shouldn't be necessary here
@@ -1925,7 +2006,7 @@ always @(posedge clk)
       end
       default:; //do nothing
     endcase
-  end // if ( RDY )
+  end
 
 always @(posedge clk) // Transfer alternation management
   if( RDY )
@@ -1933,7 +2014,12 @@ always @(posedge clk) // Transfer alternation management
       TXXA: txx_alt <= 0;
       TXXG: txx_alt <= (tia_ins | tai_ins) ? ~txx_alt : 0;
     endcase
-  
+
+always @(posedge clk) // TST mask storage
+  if( RDY )
+    casex ( state )
+      IMZP0: tst_mask <= DIMUX;
+    endcase
   
 always @*
   case( cond_code )
