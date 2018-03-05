@@ -61,7 +61,7 @@
 `define SIM
 
 module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1, IRQ2, TIMER, NMI, 
-                    RDY );
+                    HSM, RDY );
 
 input clk;              // CPU clock 
 input reset;            // reset signal
@@ -74,6 +74,7 @@ input IRQ1;             // interrupt request 1
 input IRQ2;             // interrupt request 2
 input TIMER;            // timer interrupt request
 input NMI;              // non-maskable interrupt request
+output reg HSM;         // high speed mode enabled
 input RDY;              // Ready signal. Pauses CPU when RDY=0
 
 wire IRQ;
@@ -391,8 +392,7 @@ parameter
   IMAB3   = 7'd95,
   IMAB4   = 7'd96,
   IMAB5   = 7'd97,
-  CSX0    = 7'd98,
-  CSX1    = 7'd99;
+  CSX     = 7'd98;
 `ifdef SIM
 
 /*
@@ -500,8 +500,7 @@ always @*
       IMAB3:  statename  = "IMAB3";
       IMAB4:  statename  = "IMAB4";
       IMAB5:  statename  = "IMAB5";
-      CSX0:   statename  = "CSX0";
-      CSX1:   statename  = "CSX1";
+      CSX:    statename  = "CSX";
     endcase
 
 //always @( PC )
@@ -547,7 +546,7 @@ always @*
  * Determine wether we need PC_temp, or PC_temp + 1
  */
 always @*
-    case( state ) //TODO: do txx crap with AB, not PC
+    case( state ) //TODO: do txx crap with AB, not PC (maybe this is okay?)
         DECODE:         if( (~I & IRQ) | NMI_edge | txx_ins)
                             PC_inc = 0;
                         else
@@ -681,8 +680,7 @@ always @*
         READ,
         WRITE,
         SWP,
-        CSX0,
-        CSX1:           AB = { ABH, ABL };
+        CSX:            AB = { ABH, ABL };
 
         TXXB,
         TXXC:           AB = txx_src;
@@ -1391,7 +1389,7 @@ always @(posedge clk or posedge reset)
                 8'b0110_0010,                   // CLA
                 8'b1x00_0010:   state <= REG;   // CLX, CLY
                 8'b10x0_0011:   state <= IMZP0; // TST imzp, imzpx
-                8'bx101_0100:   state <= CSX0;  // CSL, CSH
+                8'bx101_0100:   state <= CSX;   // CSL, CSH
 `ifdef IMPLEMENT_NOPS 
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column 
@@ -1547,8 +1545,7 @@ always @(posedge clk or posedge reset)
         IMAB4   : state <= IMAB5;
         IMAB5   : state <= FETCH;
 
-        CSX0    : state <= CSX1;
-        CSX1    : state <= REG;
+        CSX     : state <= REG;
     endcase
 
 /*
@@ -1914,6 +1911,14 @@ always @(posedge clk ) //TST instructions
                 8'b100x_0011: {tst_x, tst_ins} <= 2'b01; // TST {im,ab}zp
                 8'b101x_0011: {tst_x, tst_ins} <= 2'b11; // TST {im,ab}zpx
                 default:      {tst_x, tst_ins} <= 2'b00;
+        endcase
+
+always @(posedge clk, posedge reset) //CSL/CSH
+     if( reset ) HSM <= 0;
+     else if( state == DECODE && RDY )
+        casex( IR )
+                8'b0101_0100: HSM <= 0;
+                8'b1101_0100: HSM <= 1;
         endcase
   
 always @*

@@ -4,7 +4,7 @@ module tb;
   reg clk, reset;
   wire [20:0] AB_21;
   wire [7:0]  DI, DO;
-  wire        RE, WE, IRQ1, IRQ2, TIMER, NMI, RDY;
+  wire        RE, WE, IRQ1, IRQ2, TIMER, NMI, HSM, RDY;
   
   cpu_HuC6280 CPU(.*);
   memory mem(.clk, .re(RE), .we(WE), .addr(AB_21), .dIn(DO), .dOut(DI));
@@ -16,9 +16,9 @@ module tb;
   initial begin
     /*$monitor("AB: %x, DI: %x, PC: %x, State: %s, ,
              CPU.AB, CPU.DI, CPU.PC, CPU.statename, CPU.A, CPU.X, CPU.Y, CPU.S);*/
-    $monitor({"AB_21: %x, AB: %x, PC: %x, State: %s, Segment: %x, Base: %x\n",
+    $monitor({"HSM: %b, AB_21: %x, AB: %x, PC: %x, State: %s, Segment: %x, Base: %x\n",
               "A: %x, X: %x, Y: %x, S: %x"},
-             AB_21, CPU.AB, CPU.PC, CPU.statename, AB_21[20:13], AB_21[12:0],
+             HSM, AB_21, CPU.AB, CPU.PC, CPU.statename, AB_21[20:13], AB_21[12:0],
              CPU.A, CPU.X, CPU.Y, CPU.S);
     clk        = 0;
     reset      = 1'b1;
