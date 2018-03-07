@@ -4,14 +4,18 @@ module tb;
   reg clk, reset;
   wire [20:0] AB_21;
   wire [7:0]  DI, DO;
-  wire        RE, WE, IRQ1, IRQ2, TIMER, NMI, HSM, RDY;
+  wire        RE, WE, IRQ1_n, IRQ2_n, TIQ_n, NMI, HSM, RDY_n;
+
+  wire        clk_en;
   
   cpu_HuC6280 CPU(.*);
   memory mem(.clk, .re(RE), .we(WE), .addr(AB_21), .dIn(DO), .dOut(DI));
 
-  assign {IRQ1, IRQ2, TIMER} = 3'b000;
+  assign {IRQ1_n, IRQ2_n, TIQ_n} = 3'b111;
   assign NMI  = 1'b0;
-  assign RDY = 1'b1;
+  assign RDY_n  = 1'b0;
+
+  assign clk_en = 1'b1;
 
   initial begin
     /*$monitor("AB: %x, DI: %x, PC: %x, State: %s, ,
@@ -23,9 +27,12 @@ module tb;
     clk        = 0;
     reset      = 1'b1;
     #10 reset <= 1'b0;
-    //#50000;
-    while(1) #10 continue;
-    //while(CPU.AB != 16'hbeef || ~RE) #10 continue;
+    //#20000000;
+    //while(1) #10 continue;
+    //This runs until the end of 1 iteration of the IRQ wait loop in TKF
+    //while(!(CPU.AB == 16'hE226 && RE)) #10 continue;
+    while(CPU.AB != 16'hbeef || ~RE) #10 continue;
+    //$display("IRQ enable state: %3b", CPU.ictrl.IRQ_en);
     $display("A: %x, X: %x, Y: %x, S: %x",
              CPU.A, CPU.X, CPU.Y, CPU.S);
     $display("$20: %x, $21: %x", mem.RAM[21'h20], mem.RAM[21'h21]);

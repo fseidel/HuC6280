@@ -60,8 +60,8 @@
 //set this to get debugging aids
 `define SIM
 
-module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1, IRQ2, TIMER, NMI, 
-                    HSM, RDY );
+module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1_n, IRQ2_n, TIQ_n, 
+                    NMI, HSM, RDY_n, clk_en);
 
 input clk;              // CPU clock 
 input reset;            // reset signal
@@ -70,16 +70,25 @@ input [7:0] DI;         // data in, read bus
 output [7:0] DO;        // data out, write bus
 output RE;              // read enable
 output WE;              // write enable
-input IRQ1;             // interrupt request 1
-input IRQ2;             // interrupt request 2
-input TIMER;            // timer interrupt request
+input IRQ1_n;           // interrupt request 1
+input IRQ2_n;           // interrupt request 2
+input TIQ_n;            // timer interrupt request
 input NMI;              // non-maskable interrupt request
 output reg HSM;         // high speed mode enabled
-input RDY;              // Ready signal. Pauses CPU when RDY=0
+input RDY_n;            // Ready signal. Pauses CPU when RDY_n=1
+input clk_en;  
 
-wire IRQ;
-assign IRQ = IRQ1 | IRQ2 | TIMER;
-
+wire RDY;
+assign RDY = ~RDY_n & clk_en; //cheap hack to do variable clock speed
+  
+wire CE_n;
+wire CER_n;
+wire CE7_n;
+wire CEK_n;
+wire CEP_n;
+wire CET_n;
+wire CEIO_n;
+wire CECG_n; //Interrupt controller enable
 
   /* //TODO: enable these
 output CE_n;
@@ -91,15 +100,6 @@ output CET_n;
 output CEIO_n;
 output CECG_n;
    */
-
-wire CE_n;
-wire CER_n;
-wire CE7_n;
-wire CEK_n;
-wire CEP_n;
-wire CET_n;
-wire CEIO_n;
-wire CECG_n;
   
 
 /*
@@ -114,7 +114,8 @@ wire [7:0] ADD;         // Adder Hold Register (registered in ALU)
 reg  [7:0] DIHOLD;      // Hold for Data In
 reg  DIHOLD_valid;      //
 wire [7:0] DIMUX;       //
-
+reg  DIMUX_IO;          // next cycle should read from internal IO buffer
+  
 reg  [7:0] IRHOLD;      // Hold for Instruction register 
 reg  IRHOLD_valid;      // Valid instruction in IRHOLD
 
@@ -149,7 +150,8 @@ wire [7:0] PCL       = PC[7:0];
   
 reg        bbx_status;    // a cheap hack to make my life easier (fseidel)
 reg [7:0]  bbx_disp;      // ditto
-reg [7:0]  tst_mask;       // I'm starting to think these aren't hacks
+reg [7:0]  tst_mask;      // I'm starting to think these aren't hacks
+reg [7:0]  bsr_disp;      // hrm...
   
 reg        NMI_edge  = 0;       // captured NMI edge
 
@@ -252,6 +254,40 @@ reg brk;                // doing BRK
 
 reg res;                // in reset
 
+wire IRQ, IRQ1, IRQ2, TIQ;
+assign IRQ = IRQ1 | IRQ2 | TIQ; //global signal to indicate presence of IRQ
+
+/*
+ * DIMUX handling
+ */
+wire [7:0] INT_out, TIMER_out;
+reg [7:0] IO_out;
+  
+assign DIMUX = (DIMUX_IO) ? IO_out : DI;
+  
+always @(posedge clk) begin
+  if(reset) DIMUX_IO <= 0;
+  else if(RDY) begin //TODO: add more IO devices
+    if(~CECG_n & RE) begin
+      IO_out <= INT_out;
+      DIMUX_IO <= 1;
+    end
+    else DIMUX_IO <= 0;
+  end
+end
+
+  
+wire TIQ_ack;
+  
+INT_ctrl ictrl(.clk, .reset, .RDY, .re(RE), .we(WE), .CECG_n, .addr(AB_21[1:0]),
+               .dIn(DO), .dOut(INT_out), 
+               .TIQ_n, .IRQ1_n, .IRQ2_n,
+               .TIQ, .IRQ1, .IRQ2,
+               .TIQ_ack);
+
+
+
+  
 /*
  * Block transfer bookkeeping
  */
@@ -392,7 +428,13 @@ parameter
   IMAB3   = 7'd95,
   IMAB4   = 7'd96,
   IMAB5   = 7'd97,
-  CSX     = 7'd98;
+  CSX     = 7'd98, //NOP cycle for CSL/CSH
+  BSR0    = 7'd99, //store offset to internal buffer, S->ALU
+  BSR1    = 7'd100,//push PCH, S--
+  BSR2    = 7'd101,//push PCL S--
+  BSR3    = 7'd102,//add offset to PCL, write S
+  BSR4    = 7'd103,//carry to PCH
+  BSR5    = 7'd104;//present PC to bus
 `ifdef SIM
 
 /*
@@ -501,6 +543,12 @@ always @*
       IMAB4:  statename  = "IMAB4";
       IMAB5:  statename  = "IMAB5";
       CSX:    statename  = "CSX";
+      BSR0:   statename  = "BSR0";
+      BSR1:   statename  = "BSR1";
+      BSR2:   statename  = "BSR2";
+      BSR3:   statename  = "BSR3";
+      BSR4:   statename  = "BSR4";
+      BSR5:   statename  = "BSR5";
     endcase
 
 //always @( PC )
@@ -528,15 +576,20 @@ always @*
         RTI4:           PC_temp = { DIMUX, ADD };
                         
         BRA1,
-        BBX4:           PC_temp  = { ABH, ADD };
+        BBX4,
+        BSR4:           PC_temp = { ABH, ADD };
 
         JMPIX2,
         BRA2,
-        BBX5:           PC_temp = { ADD, PCL };
+        BBX5,
+        BSR5:           PC_temp = { ADD, PCL };
 
+        BSR0:           PC_temp = { ABH, ABL };
+
+      
         BRK2:           PC_temp = res      ? 16'hfffe : //IRQ2 and BRK
                                   NMI_edge ? 16'hfffc : //share a vector
-                                  TIMER    ? 16'hfffa : 
+                                  TIQ      ? 16'hfffa : 
                                   IRQ1     ? 16'hfff8 : 16'hfff6; 
       
         default:        PC_temp = PC;
@@ -573,7 +626,8 @@ always @*
         TXXH,
         IMZP0,
         IMAB0,
-        IMAB1:          PC_inc = 1;
+        IMAB1,
+        BSR2:           PC_inc = 1;
 
         JMPIX1:         PC_inc = ~CO;       // Don't increment PC if we are 
                                             // going to go through JMPIX2
@@ -600,7 +654,7 @@ always @(posedge clk)
   assign STx_override = 0;
   
   MMU mmu(.clk, .reset, .RDY, .load_en(MMU_tam), .store_en(MMU_tma),
-          .MPR_mask(DI), .d_in(regfile), .VADDR(AB), .STx_override,
+          .MPR_mask(DIMUX), .d_in(regfile), .VADDR(AB), .STx_override,
           .PADDR(AB_21), .d_out(MMU_out),
           .CE7_n, .CEK_n, .CEP_n, .CET_n, .CEIO_n, .CECG_n, .CE_n, .CER_n);
 
@@ -664,7 +718,9 @@ always @*
         TXX3,
         TXXI,
         TXXJ,
-        TXXK:           AB = { STACKPAGE, ADD };
+        TXXK,
+        BSR1,
+        BSR2:           AB = { STACKPAGE, ADD };
         
         INDY1,
         INDX1,
@@ -680,7 +736,8 @@ always @*
         READ,
         WRITE,
         SWP,
-        CSX:            AB = { ABH, ABL };
+        CSX,
+        BSR0:           AB = { ABH, ABL };
 
         TXXB,
         TXXC:           AB = txx_src;
@@ -712,10 +769,12 @@ always @*
         WRITE:   DO = ADD;
 
         JSR0,
-        BRK0:    DO = PCH;
+        BRK0,
+        BSR1:    DO = PCH;
 
         JSR1,
-        BRK1:    DO = PCL;
+        BRK1,
+        BSR2:    DO = PCL;
 
         PUSH1:   DO = php ? P : ADD;
 
@@ -827,7 +886,9 @@ always @*
         TXX1,
         TXX2,
         TXX3,
-        TXXE:    WE = 1;
+        TXXE,
+        BSR1,
+        BSR2:    WE = 1;
 
         INDX3,  // only if doing a STA, STX or STY
         INDY3,
@@ -861,7 +922,8 @@ always @*
          TXXD,
          TXXJ,
          TXXK,
-         TMA1:  write_register  = 1;
+         TMA1,
+         BSR3:  write_register  = 1;
 
          REG:   write_register  = swp_ins; //write back if we're swapping
 
@@ -970,7 +1032,9 @@ always @*
         TXX0,
         TXX4,
         TXXH,
-        TXXK   : regsel = SEL_S;
+        TXXK,
+        BSR0,
+        BSR3   : regsel = SEL_S;
 
         TXX1   : regsel = SEL_Y;
 
@@ -1015,7 +1079,7 @@ always @*
 
         BRA1:   alu_op = backwards ? OP_SUB : OP_ADD; 
         BBX4:   alu_op = (bbx_disp[7]) ? OP_SUB : OP_ADD;
-
+        BSR4:   alu_op = (bsr_disp[7]) ? OP_SUB : OP_ADD;
       
         FETCH,
         REG :   alu_op = op; 
@@ -1031,7 +1095,9 @@ always @*
         JSR1,
         TXX1,
         TXX2,
-        TXX3:   alu_op = OP_SUB;
+        TXX3,
+        BSR1,
+        BSR2:   alu_op = OP_SUB;
 
         BBX1:   alu_op = OP_AND;
       
@@ -1084,7 +1150,9 @@ always @*
         PUSH0,
         PUSH1,
         TXX0,
-        TXXH:   AI  = regfile;
+        TXXH,
+        SWP,
+        BSR0:  AI  = regfile;
 
         TXX1,
         TXX2,
@@ -1093,7 +1161,9 @@ always @*
         TXXJ,
         IMZP2,
         IMZP3,
-        IMZP4:   AI  = ADD;
+        IMZP4,
+        BSR1,
+        BSR2:   AI  = ADD;
        
       
         BRA0,
@@ -1109,9 +1179,11 @@ always @*
         ABS1:   AI = 8'hxx;     // don't care
 
         BBX3:   AI = bbx_disp;
-        BBX4:   AI = PCH;
 
-        SWP:    AI = regfile;
+        BSR3:   AI = bsr_disp;
+
+        BBX4,
+        BSR4:   AI = PCH;
 
         REG:    AI = clr_ins ? 0 : regfile;
 
@@ -1162,7 +1234,11 @@ always @*
          SWP,
          IMZP2,
          IMZP3,
-         IMZP4:   BI = 8'h00;
+         IMZP4,
+         BSR0,
+         BSR1,
+         BSR2,
+         BSR4:  BI = 8'h00;
 
          READ: begin
            if(txb_ins) BI  = BI_txb;
@@ -1171,7 +1247,8 @@ always @*
            end
 
          BRA0,
-         BBX3:  BI  = PCL;
+         BBX3,
+         BSR3:  BI  = PCL;
 
          DECODE,
          ABS1:  BI  = 8'hxx;
@@ -1190,7 +1267,8 @@ always @*
         BRA1,
         JMPIX1,
         ABSX1, 
-        BBX4:   CI = CO;
+        BBX4,
+        BSR4:   CI = CO;
 
         DECODE,
         ABS1:   CI = 1'bx;
@@ -1351,8 +1429,9 @@ assign IR = (IRQ & ~I) | NMI_edge ? 8'h00 :
                      IRHOLD_valid ? IRHOLD : DIMUX;
 
 //assign DIMUX = ~RDY1 ? DIHOLD : DI;
-   
-assign DIMUX = DI;   
+  
+//fseidel: DIMUX is being repurposed for handling on-chip MMIO 
+//assign DIMUX = DI;   
 
 /*
  * Microcode state machine
@@ -1390,6 +1469,7 @@ always @(posedge clk or posedge reset)
                 8'b1x00_0010:   state <= REG;   // CLX, CLY
                 8'b10x0_0011:   state <= IMZP0; // TST imzp, imzpx
                 8'bx101_0100:   state <= CSX;   // CSL, CSH
+                8'b0100_0100:   state <= BSR0;
 `ifdef IMPLEMENT_NOPS 
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column 
@@ -1546,6 +1626,13 @@ always @(posedge clk or posedge reset)
         IMAB5   : state <= FETCH;
 
         CSX     : state <= REG;
+
+        BSR0    : state <= BSR1;
+        BSR1    : state <= BSR2;
+        BSR2    : state <= BSR3;
+        BSR3    : state <= BSR4;
+        BSR4    : state <= BSR5;
+        BSR5    : state <= FETCH;
     endcase
 
 /*
@@ -1920,6 +2007,11 @@ always @(posedge clk, posedge reset) //CSL/CSH
                 8'b0101_0100: HSM <= 0;
                 8'b1101_0100: HSM <= 1;
         endcase
+
+always @(posedge clk )
+     if( state == BSR0 && RDY )
+                bsr_disp <= DIMUX;
+
   
 always @*
   if( state == DECODE ) // fseidel: RDY shouldn't be necessary here
@@ -1989,12 +2081,12 @@ always @(posedge clk)
 always @(posedge clk)
   if( RDY ) begin
     case( state )
-      TXX5: txx_src[7:0]  <= DI;
-      TXX6: txx_src[15:8] <= DI;
-      TXX7: txx_dst[7:0]  <= DI;
-      TXX8: txx_dst[15:8] <= DI;
-      TXX9: txx_len[7:0]  <= DI;
-      TXXA: txx_len[15:8] <= DI;
+      TXX5: txx_src[7:0]  <= DIMUX;
+      TXX6: txx_src[15:8] <= DIMUX;
+      TXX7: txx_dst[7:0]  <= DIMUX;
+      TXX8: txx_dst[15:8] <= DIMUX;
+      TXX9: txx_len[7:0]  <= DIMUX;
+      TXXA: txx_len[15:8] <= DIMUX;
       TXXF: begin
         txx_len <= txx_len - 1; //always decrement the length counter
         if( tii_ins | tin_ins | tia_ins | (tai_ins & ~txx_alt) )
