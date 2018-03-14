@@ -21,7 +21,6 @@ module memory(input wire [20:0] addr,
     for(int i = 0; i < RAMSIZE; i++) RAM[i] = 8'h0;
   end
 
-  
   always @(posedge clk) begin
     dOut <= 8'hxx;
     if(re & we) begin
@@ -39,7 +38,10 @@ module memory(input wire [20:0] addr,
       else if(re) dOut <= RAM[addr[12:0]];
     end
     else if(addr >= 21'h1FE000) begin
-      if(addr[12:0] == 13'h1000) begin // controller
+      if(addr[12:0] < 13'h400) begin
+        $display("VDC port %x access", addr[1:0]);
+      end
+      else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin
           $display("controller read");
           dOut <= 8'b0100_0000; // Region bit == Japan
@@ -50,6 +52,11 @@ module memory(input wire [20:0] addr,
       end
       else if(addr[12:0] >= 13'h800 && addr[12:0] < 13'hC00) begin //PSG
         $display("PSG access");
+      end
+      else if(addr[12:0] >= 13'hC00 && addr[12:0] < 13'h1000) begin //TIMER
+        string str[2] = {"read", "write"};
+        $display("TIMER accessed, port %b %s", addr[0], str[~re]);
+        $display("dIn: %x", dIn);
       end
       else begin
         if(re) begin

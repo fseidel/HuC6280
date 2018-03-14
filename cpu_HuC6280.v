@@ -60,7 +60,7 @@
 //set this to get debugging aids
 `define SIM
 
-module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1_n, IRQ2_n, TIQ_n, 
+module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1_n, IRQ2_n, 
                     NMI, HSM, RDY_n, clk_en);
 
 input clk;              // CPU clock 
@@ -72,7 +72,6 @@ output RE;              // read enable
 output WE;              // write enable
 input IRQ1_n;           // interrupt request 1
 input IRQ2_n;           // interrupt request 2
-input TIQ_n;            // timer interrupt request
 input NMI;              // non-maskable interrupt request
 output reg HSM;         // high speed mode enabled
 input RDY_n;            // Ready signal. Pauses CPU when RDY_n=1
@@ -90,6 +89,8 @@ wire CET_n;
 wire CEIO_n;
 wire CECG_n; //Interrupt controller enable
 
+wire TIQ_n;  // timer interrupt request
+  
   /* //TODO: enable these
 output CE_n;
 output CER_n;
@@ -257,8 +258,18 @@ reg res;                // in reset
 wire IRQ, IRQ1, IRQ2, TIQ;
 assign IRQ = IRQ1 | IRQ2 | TIQ; //global signal to indicate presence of IRQ
 
+//IRQ debug
+always @(posedge IRQ) begin
+  if(IRQ) begin
+    $stop;
+  end
+end
+
+
+  
 /*
  * DIMUX handling
+ * TODO: handle cases where I/O buffer is not written
  */
 wire [7:0] INT_out, TIMER_out;
 reg [7:0] IO_out;
@@ -268,15 +279,25 @@ assign DIMUX = (DIMUX_IO) ? IO_out : DI;
 always @(posedge clk) begin
   if(reset) DIMUX_IO <= 0;
   else if(RDY) begin //TODO: add more IO devices
-    if(~CECG_n & RE) begin
-      IO_out <= INT_out;
-      DIMUX_IO <= 1;
+    if(RE) begin
+      if(~CECG_n) begin
+        IO_out   <= INT_out;
+        DIMUX_IO <= 1;
+      end
+      else if (~CET_n) begin
+        IO_out   <= TIMER_out;
+        DIMUX_IO <= 1;
+      end
+      else DIMUX_IO <= 0;
     end
     else DIMUX_IO <= 0;
   end
 end
 
-  
+
+/*
+ * Interrupt controller
+ */
 wire TIQ_ack;
   
 INT_ctrl ictrl(.clk, .reset, .RDY, .re(RE), .we(WE), .CECG_n, .addr(AB_21[1:0]),
@@ -284,8 +305,13 @@ INT_ctrl ictrl(.clk, .reset, .RDY, .re(RE), .we(WE), .CECG_n, .addr(AB_21[1:0]),
                .TIQ_n, .IRQ1_n, .IRQ2_n,
                .TIQ, .IRQ1, .IRQ2,
                .TIQ_ack);
-
-
+/*
+ * Timer
+ */
+TIMER itimer(.clk, .reset, //stupid name because of keywords
+             .re(RE), .we(WE),
+             .clk_en, .dIn(DO), .dOut(TIMER_out),
+             .CET_n, .addr(AB_21[0]), .TIQ_ack, .TIQ_n); 
 
   
 /*
