@@ -61,7 +61,7 @@
 `define SIM
 
 module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1_n, IRQ2_n, 
-                    NMI, HSM, RDY_n, clk_en);
+                    NMI, HSM, RDY_n);
 
 input clk;              // CPU clock 
 input reset;            // reset signal
@@ -74,9 +74,18 @@ input IRQ1_n;           // interrupt request 1
 input IRQ2_n;           // interrupt request 2
 input NMI;              // non-maskable interrupt request
 output reg HSM;         // high speed mode enabled
-input RDY_n;            // Ready signal. Pauses CPU when RDY_n=1
-input clk_en;  
+input RDY_n;            // Ready signal. Pauses CPU when RDY_n=1  
 
+//clocking
+wire clk72_en, clk18_en;
+clock_divider #(3)  clk72(.clk, .reset, .clk_en(clk72_en));
+clock_divider #(12) clk18(.clk, .reset, .clk_en(clk18_en));
+
+wire clk_en;
+//assign clk_en = 1; //This line is nice for testing
+assign clk_en = (HSM) ? clk72_en : clk18_en;
+
+  
 wire RDY;
 assign RDY = ~RDY_n & clk_en; //cheap hack to do variable clock speed
   
@@ -272,9 +281,31 @@ end
  * TODO: handle cases where I/O buffer is not written
  */
 wire [7:0] INT_out, TIMER_out;
-reg [7:0] IO_out;
+reg [7:0] IO_out, cur_read, latched_read;
+reg     read_delay; //selects whether or not we go for a real read on next clock
+
+always @(posedge clk) begin
+  if(reset)
+    read_delay <= 0;
+  else if(clk_en)
+    read_delay <= 0;
+  else
+    read_delay <= 1;
+end
+
+assign cur_read = (DIMUX_IO) ? IO_out : DI;
   
-assign DIMUX = (DIMUX_IO) ? IO_out : DI;
+assign DIMUX = (read_delay) ? latched_read : cur_read;
+  
+//needs extra cycle of delay
+//assign DIMUX = (DIMUX_IO) ? IO_buf : MEM_buf; 
+
+
+//only latch reads when clock is enabled
+always @(posedge clk) begin
+  if( clk_en )
+    latched_read <= cur_read;
+end
   
 always @(posedge clk) begin
   if(reset) DIMUX_IO <= 0;
@@ -310,7 +341,7 @@ INT_ctrl ictrl(.clk, .reset, .RDY, .re(RE), .we(WE), .CECG_n, .addr(AB_21[1:0]),
  */
 TIMER itimer(.clk, .reset, //stupid name because of keywords
              .re(RE), .we(WE),
-             .clk_en, .dIn(DO), .dOut(TIMER_out),
+             .clk_en(clk72_en), .dIn(DO), .dOut(TIMER_out),
              .CET_n, .addr(AB_21[0]), .TIQ_ack, .TIQ_n); 
 
   
@@ -2026,7 +2057,7 @@ always @(posedge clk ) //TST instructions
                 default:      {tst_x, tst_ins} <= 2'b00;
         endcase
 
-always @(posedge clk, posedge reset) //CSL/CSH
+always @(posedge clk) //CSL/CSH
      if( reset ) HSM <= 0;
      else if( state == DECODE && RDY )
         casex( IR )

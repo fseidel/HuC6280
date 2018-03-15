@@ -29,10 +29,10 @@ module TIMER(input wire        clk, reset,
  
   //MMIO write
   always @(posedge clk) begin
-    if(clk_en) begin
-      if(reset)
+    if(reset)
         timer_en <= 0;
-      else if(~CET_n & we) begin
+    else if(clk_en) begin
+      if(~CET_n & we) begin
         if(~addr) //counter
           reset_val <= dIn[6:0];
         else //control
@@ -42,10 +42,10 @@ module TIMER(input wire        clk, reset,
   end
   
   always @(posedge clk) begin
-    if(clk_en) begin
-      if(reset)
+    if(reset)
         div <= 1023;
-      else if(restart) //timer is being started
+    else if(clk_en) begin
+      if(restart) //timer is being started
         div <= 1023;
       else if(timer_en)
         div <= div - 1;
@@ -54,10 +54,10 @@ module TIMER(input wire        clk, reset,
   
   
   always @(posedge clk) begin
-    if(clk_en) begin
-      if(reset)
+    if(reset)
         counter <= 0;
-      else if(timer_en && div == 0) begin
+    else if(clk_en) begin
+      if(timer_en && div == 0) begin
         if(counter != 0)
           counter <= counter - 1;
         else
@@ -70,10 +70,10 @@ module TIMER(input wire        clk, reset,
 
 
   always @(posedge clk) begin
-    if(clk_en) begin
-      if(reset)
+    if(reset)
         TIQ_n <= 1;
-      else if(timer_en && div == 0 && counter == 0)
+    else if(clk_en) begin
+      if(timer_en && div == 0 && counter == 0)
         TIQ_n <= 0;
       else if(TIQ_ack)
         TIQ_n <= 1;
