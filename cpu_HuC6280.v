@@ -286,6 +286,7 @@ wire [7:0] INT_out, TIMER_out;
 reg [7:0] IO_out, cur_read, latched_read;
 reg     read_delay; //selects whether or not we go for a real read on next clock
 
+  
 always @(posedge clk) begin
   if(reset)
     read_delay <= 0;
@@ -294,19 +295,15 @@ always @(posedge clk) begin
   else
     read_delay <= 1;
 end
-
+  
 assign cur_read = (DIMUX_IO) ? IO_out : DI;
   
 assign DIMUX = (read_delay) ? latched_read : cur_read;
-  
-//needs extra cycle of delay
-//assign DIMUX = (DIMUX_IO) ? IO_buf : MEM_buf; 
 
-
-//only latch reads when clock is enabled
+//only latch reads when clock enable goes low
 always @(posedge clk) begin
-  if( clk_en )
-    latched_read <= cur_read;
+  if( ~clk_en )
+    latched_read <= DIMUX;
 end
   
 always @(posedge clk) begin
@@ -1624,7 +1621,7 @@ always @(posedge clk or posedge reset)
         RTS2    : state <= RTS3;
         RTS3    : state <= FETCH;
 
-        BRA0     : state <= cond_true ? BRA1 : DECODE;
+        BRA0    : state <= cond_true ? BRA1 : DECODE;
         BRA1    : state <= (CO ^ backwards) ? BRA2 : DECODE;
         BRA2    : state <= DECODE;
 
