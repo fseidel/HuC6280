@@ -60,14 +60,15 @@
 //set this to get debugging aids
 `define SIM
 
-module cpu_HuC6280( clk, reset, AB_21, DI, DO, RE, WE, IRQ1_n, IRQ2_n, 
-                    NMI, HSM, RDY_n);
+module cpu_HuC6280( clk, reset, AB_21, DI, DO, EXT_out, RE, WE, IRQ1_n, IRQ2_n, 
+                    NMI, HSM, RDY_n, CEK_n);
 
 input clk;              // CPU clock 
 input reset;            // reset signal
 output reg [20:0] AB_21;// address bus (post-MMU)
 input [7:0] DI;         // data in, read bus
 output [7:0] DO;        // data out, write bus
+input  [7:0] EXT_out;   // data driven by external peripherals
 output RE;              // read enable
 output WE;              // write enable
 input IRQ1_n;           // interrupt request 1
@@ -75,14 +76,15 @@ input IRQ2_n;           // interrupt request 2
 input NMI;              // non-maskable interrupt request
 output reg HSM;         // high speed mode enabled
 input RDY_n;            // Ready signal. Pauses CPU when RDY_n=1  
-
+output CEK_n;           // VCE enable signal
+  
 //clocking
 wire clk72_en, clk18_en;
 clock_divider #(3)  clk72(.clk, .reset, .clk_en(clk72_en));
 clock_divider #(12) clk18(.clk, .reset, .clk_en(clk18_en));
 
 wire clk_en;
-//assign clk_en = 1; //This line is nice for testing
+//assign clk_en = 1; //This line is nice for testing, but BE CAREFUL
 assign clk_en = (HSM) ? clk72_en : clk18_en;
 
   
@@ -317,6 +319,10 @@ always @(posedge clk) begin
       end
       else if (~CET_n) begin
         IO_out   <= TIMER_out;
+        DIMUX_IO <= 1;
+      end
+      else if(~CEK_n) begin //external peripherals
+        IO_out   <= EXT_out;
         DIMUX_IO <= 1;
       end
       else DIMUX_IO <= 0;

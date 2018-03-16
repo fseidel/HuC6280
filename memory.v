@@ -41,6 +41,9 @@ module memory(input wire [20:0] addr,
       if(addr[12:0] < 13'h400) begin
         $display("VDC port %x access", addr[1:0]);
       end
+      else if(addr[12:0] < 13'h800) begin
+        $display("VCE port %x access", addr[2:0]);
+      end
       else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin
           $display("controller read");
@@ -62,7 +65,7 @@ module memory(input wire [20:0] addr,
         if(re) begin
           $display("IO read to %x", addr);
           $display("IO Region Unimplemented");
-          #1 $finish;
+          //#1 $finish;
         end
         else if(we) begin
           $display("IO write to %x", addr);
