@@ -16,7 +16,8 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
            output wire       CE7_n, CEK_n, //VDC, VCE chip enable
            output wire       CEP_n, CET_n, //PSG, Timer chip enable
            output wire       CEIO_n, CECG_n, //IO, Interrupt chip enable
-           output wire       CE_n, CER_n); //ROM, RAM chip enable
+           output wire       CE_n, CER_n,    //ROM, RAM chip enable
+           output wire       IO_sel);        //high when IO device selected
 
   reg [7:0][7:0] MPR; //the memory paging register file
   reg [7:0]      databuf; //data for transfer from MPRs
@@ -30,6 +31,10 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
   assign CET_n  = !(PADDR >= 21'h1FEC00 && PADDR <= 21'h1FEFFF);
   assign CEIO_n = !(PADDR >= 21'h1FF000 && PADDR <= 21'h1FF3FF);
   assign CECG_n = !(PADDR >= 21'h1FF400 && PADDR <= 21'h1FF7FF);
+
+
+  assign IO_sel = (PADDR >= 21'h1FE000); //is address in IO segment?
+
   
   assign PADDR = (STx_override) ? 
                  (21'h1FE000 | VADDR[1:0]) : 
@@ -57,7 +62,8 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
   
   always @(posedge clk) begin
     if(reset) begin
-      MPR[7] <= 8'h00; //only MPR7 is cleared on reset
+      for(int i = 0; i < 8; i++)
+        MPR[i] <= 8'h00; //clearing all MPRs makes BUSY_n on VDC behave
       state <= IDLE;
     end
     else if(RDY) begin

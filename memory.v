@@ -42,7 +42,7 @@ module memory(input wire [20:0] addr,
         $display("VDC port %x access", addr[1:0]);
       end
       else if(addr[12:0] < 13'h800) begin
-        $display("VCE port %x access", addr[2:0]);
+        //$display("VCE port %x access", addr[2:0]);
       end
       else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin
