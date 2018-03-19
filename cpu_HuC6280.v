@@ -270,13 +270,14 @@ reg res;                // in reset
 wire IRQ, IRQ1, IRQ2, TIQ;
 assign IRQ = IRQ1 | IRQ2 | TIQ; //global signal to indicate presence of IRQ
 
+  /*
 //IRQ debug
 always @(posedge IRQ) begin
   if(IRQ) begin
     $stop;
   end
 end
-
+*/
 
 
 /*
@@ -318,6 +319,10 @@ always @(posedge clk) begin
       end
       else if (~CET_n) begin
         IO_out   <= TIMER_out;
+        DIMUX_IO <= 1;
+      end
+      else if(~CEIO_n) begin
+        IO_out   <= 8'b0100_0000; // Region bit == Japan
         DIMUX_IO <= 1;
       end
       else if(IO_sel) begin //external peripherals
@@ -611,6 +616,7 @@ always @*
       BSR3:   statename  = "BSR3";
       BSR4:   statename  = "BSR4";
       BSR5:   statename  = "BSR5";
+      default: statename = "ILLEGAL";
     endcase
 
 //always @( PC )

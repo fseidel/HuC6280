@@ -15,12 +15,15 @@ module memory(input wire [20:0] addr,
   localparam RAMSIZE  = 8*1024;
   
   reg [7:0]                    RAM[RAMSIZE-1:0];                 
+
+  wire [7:0]                   counter;                   
+  assign counter = RAM[21'h30];
   
   initial begin
     $readmemh("test.hex", ROM);
     for(int i = 0; i < RAMSIZE; i++) RAM[i] = 8'h0;
   end
-
+  
   always @(posedge clk) begin
     dOut <= 8'hxx;
     if(re & we) begin
@@ -39,36 +42,38 @@ module memory(input wire [20:0] addr,
     end
     else if(addr >= 21'h1FE000) begin
       if(addr[12:0] < 13'h400) begin
-        $display("VDC port %x access", addr[1:0]);
+        //$display("VDC port %x access", addr[1:0]);
+        if(re & (addr[1:0] != 2'b00))
+          $display("non-status VDC read, this might be bad!");
       end
       else if(addr[12:0] < 13'h800) begin
         //$display("VCE port %x access", addr[2:0]);
       end
       else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin
-          $display("controller read");
+          //$display("controller read");
           dOut <= 8'b0100_0000; // Region bit == Japan
         end
         else if(we) begin
-          $display("controller write");
+          //$display("controller write");
         end
       end
       else if(addr[12:0] >= 13'h800 && addr[12:0] < 13'hC00) begin //PSG
-        $display("PSG access");
+        //$display("PSG access");
       end
       else if(addr[12:0] >= 13'hC00 && addr[12:0] < 13'h1000) begin //TIMER
         string str[2] = {"read", "write"};
-        $display("TIMER accessed, port %b %s", addr[0], str[~re]);
-        $display("dIn: %x", dIn);
+        //$display("TIMER accessed, port %b %s", addr[0], str[~re]);
+        //$display("dIn: %x", dIn);
       end
       else begin
         if(re) begin
-          $display("IO read to %x", addr);
-          $display("IO Region Unimplemented");
+          //$display("IO read to %x", addr);
+          //$display("IO Region Unimplemented");
           //#1 $finish;
         end
         else if(we) begin
-          $display("IO write to %x", addr);
+          //$display("IO write to %x", addr);
         end
       end
     end
