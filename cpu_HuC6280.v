@@ -61,7 +61,7 @@
 `define SIM
 
 module cpu_HuC6280( clk, reset, AB_21, DI, DO, EXT_out, RE, WE, IRQ1_n, IRQ2_n,
-                    NMI, HSM, RDY_n, CE7_n, CEK_n);
+                    NMI, HSM, RDY_n, CE_n, CER_n, CE7_n, CEK_n);
 
 input clk;              // CPU clock
 input reset;            // reset signal
@@ -76,6 +76,8 @@ input IRQ2_n;           // interrupt request 2
 input NMI;              // non-maskable interrupt request
 output reg HSM;         // high speed mode enabled
 input RDY_n;            // Ready signal. Pauses CPU when RDY_n=1
+output CE_n;            // ROM enable signal
+output CER_n;           // RAM enable signal
 output CE7_n;           // VDC enable signal
 output CEK_n;           // VCE enable signal
 
@@ -89,11 +91,10 @@ wire clk_en;
 assign clk_en = (HSM) ? clk72_en : clk18_en;
 
 
-wire RDY;
-assign RDY = ~RDY_n & clk_en; //cheap hack to do variable clock speed
+wire RDY_preMMU, RDY, MMU_stall;
+assign RDY_preMMU = ~RDY_n & clk_en; //cheap hack to do variable clock speed
+assign RDY = RDY_preMMU & ~MMU_stall;
 
-wire CE_n;
-wire CER_n;
 //wire CE7_n;
 //wire CEK_n;
 wire CEP_n;
@@ -303,9 +304,9 @@ assign cur_read = (DIMUX_IO) ? IO_out : DI;
 
 assign DIMUX = (read_delay) ? latched_read : cur_read;
 
-//only latch reads when we are stalling
+//only latch reads when we are mid-cycle
 always @(posedge clk) begin
-  if( ~RDY )
+  if( ~clk_en )
     latched_read <= DIMUX;
 end
 
@@ -503,7 +504,8 @@ parameter
   BSR3    = 7'd102,//add offset to PCL, write S
   BSR4    = 7'd103,//carry to PCH
   BSR5    = 7'd104,//present PC to bus
-  STX     = 7'd105;//ST{0,1,2}
+  STX0    = 7'd105,//fetch immediate
+  STX1    = 7'd106;//write to VDC
 `ifdef SIM
 
 /*
@@ -618,7 +620,8 @@ always @*
       BSR3:   statename  = "BSR3";
       BSR4:   statename  = "BSR4";
       BSR5:   statename  = "BSR5";
-      STX:    statename  = "STX";
+      STX0:   statename  = "STX0";
+      STX1:   statename  = "STX1";
       default: statename = "ILLEGAL";
     endcase
 
@@ -718,13 +721,14 @@ always @(posedge clk)
   /*
    * MMU
    */
-  reg MMU_tam, MMU_tma;
+  reg  MMU_tam, MMU_tma;
   reg  STx_override;
   wire [7:0] MMU_out;
 
-  assign STx_override = (state == STX);
+  assign STx_override = (state == STX1);
 
-  MMU mmu(.clk, .reset, .RDY, .load_en(MMU_tam), .store_en(MMU_tma),
+  MMU mmu(.clk, .reset, .RDY(RDY_preMMU), .load_en(MMU_tam), .store_en(MMU_tma),
+          .RE, .WE, .MMU_stall,
           .MPR_mask(DIMUX), .d_in(regfile), .VADDR(AB), .STx_override,
           .PADDR(AB_21), .d_out(MMU_out),
           .CE7_n, .CEK_n, .CEP_n, .CET_n, .CEIO_n, .CECG_n, .CE_n, .CER_n,
@@ -817,7 +821,7 @@ always @*
         TXXD,
         TXXE:           AB = txx_dst;
 
-        STX:            AB = {8'h00, 2'b00, stx_dst};
+        STX1:           AB = {8'h00, 2'b00, stx_dst};
       
       default:          AB = PC;
     endcase
@@ -840,7 +844,8 @@ always @(posedge clk)
  */
 always @*
     case( state )
-        WRITE:   DO = ADD;
+        WRITE,
+        STX1:   DO = ADD;
 
         JSR0,
         BRK0,
@@ -858,9 +863,6 @@ always @*
         TXX2,
         TXX3,
         TXXE:    DO = regfile;
-
-
-        STX:     DO = DIMUX; //TODO: make this suck less
 
       
         default: DO = store_zero ? 0 : regfile;
@@ -967,7 +969,7 @@ always @*
         TXXE,
         BSR1,
         BSR2,
-        STX:     WE = 1;
+        STX1:    WE = 1;
 
         INDX3,  // only if doing a STA, STX or STY
         INDY3,
@@ -1550,7 +1552,7 @@ always @(posedge clk or posedge reset)
                 8'bx101_0100:   state <= CSX;   // CSL, CSH
                 8'b0100_0100:   state <= BSR0;  // BSR
                 8'b000x_0011,
-                8'b0010_0011:   state <= STX;
+                8'b0010_0011:   state <= STX0;
 `ifdef IMPLEMENT_NOPS
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column
@@ -1715,7 +1717,8 @@ always @(posedge clk or posedge reset)
         BSR4    : state <= BSR5;
         BSR5    : state <= FETCH;
 
-        STX     : state <= FETCH;
+        STX0    : state <= STX1;
+        STX1    : state <= FETCH;
     endcase
 
 /*

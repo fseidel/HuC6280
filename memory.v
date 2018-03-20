@@ -4,9 +4,10 @@
 
 
 module memory(input wire [20:0] addr,
-              input wire [7:0]  dIn,
+              input wire [7:0] dIn,
               output reg [7:0] dOut,
-              input wire       re, we, clk);
+              input wire       re, we, clk,
+              input wire       CE_n, CER_n);
 
   localparam ROMSIZE  = 512*1024;
   
@@ -33,7 +34,7 @@ module memory(input wire [20:0] addr,
       #1 $finish;
     end
     if(addr < 21'h1F0000) begin
-      if(re) begin
+      if(re & ~CE_n) begin
         if(^ROM[addr] !== 1'bx) //stupid hack for backup RAM
           dOut <= ROM[addr];
         else
@@ -42,10 +43,10 @@ module memory(input wire [20:0] addr,
       
     end
     else if(addr < 21'h1F2000) begin
-      if(we) begin  
+      if(we & ~CER_n)
         RAM[addr[12:0]] <= dIn;
-      end
-      else if(re) dOut <= RAM[addr[12:0]];
+      else if(re & ~CER_n)
+        dOut <= RAM[addr[12:0]];
     end
     else if(addr >= 21'h1FE000) begin
       if(addr[12:0] < 13'h400) begin
@@ -54,7 +55,7 @@ module memory(input wire [20:0] addr,
           $display("non-status VDC read, this might be bad!");
       end
       else if(addr[12:0] < 13'h800) begin
-        $display("VCE port %x access", addr[2:0]);
+        //$display("VCE port %x access", addr[2:0]);
       end
       else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin

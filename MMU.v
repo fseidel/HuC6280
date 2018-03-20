@@ -5,6 +5,7 @@
  */
 
 module MMU(input wire        clk, reset, RDY, //self-explanatory
+           input wire        RE, WE, //used for determining when to stall
            input wire        load_en, //CPU requesting MMU modify registers
            input wire        store_en, //CPU requesting MPR data
            input wire [7:0]  MPR_mask, //MPR(s) we wish to operate on
@@ -16,14 +17,15 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
            output wire       CE7_n, CEK_n, //VDC, VCE chip enable
            output wire       CEP_n, CET_n, //PSG, Timer chip enable
            output wire       CEIO_n, CECG_n, //IO, Interrupt chip enable
-           output wire       CE_n, CER_n,    //ROM, RAM chip enable
-           output wire       IO_sel);        //high when IO device selected
+           output wire       CE_n, CER_n, //ROM, RAM chip enable
+           output wire       IO_sel,      //high when IO device selected
+           output reg        MMU_stall);      
 
   reg [7:0][7:0] MPR; //the memory paging register file
   reg [7:0]      databuf; //data for transfer from MPRs
   reg [7:0]      localmask; //a copy of the mask  
 
-  assign CE_n   = !(PADDR <= 21'h001FFF);
+  assign CE_n   = !(PADDR <= 21'h1EFFFF);
   assign CER_n  = !(PADDR >= 21'h1F0000 && PADDR <= 21'h1F1FFF);
   assign CE7_n  = !(PADDR >= 21'h1FE000 && PADDR <= 21'h1FE3FF);
   assign CEK_n  = !(PADDR >= 21'h1FE400 && PADDR <= 21'h1FE7FF);
@@ -41,6 +43,19 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
                  {MPR[VADDR[15:13]], VADDR[12:0]};
   
   enum logic [1:0] {IDLE, LOAD, STORE} state;
+
+
+  always @(posedge clk) begin
+    if(reset)
+      MMU_stall <= 0;
+    else if(RDY) begin
+      if(~CE7_n & ~MMU_stall & (RE | WE))
+        MMU_stall <= 1;
+      else
+        MMU_stall <= 0;
+    end
+  end
+
   
 
   always @* begin
