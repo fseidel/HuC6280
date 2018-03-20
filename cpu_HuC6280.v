@@ -253,7 +253,8 @@ reg sax_ins;            // doing SAX instruction
 reg clr_ins;            // doing CLA/CLX/CLY instruction
 reg tst_ins;            // doing TST instruction
 reg tst_x;              // TST instruction is x-relative
-
+reg [1:0] stx_dst;      // destination of an ST{0,1,2} instruction
+  
 reg plp;                // doing PLP instruction
 reg php;                // doing PHP instruction
 reg clc;                // clear carry
@@ -501,7 +502,8 @@ parameter
   BSR2    = 7'd101,//push PCL S--
   BSR3    = 7'd102,//add offset to PCL, write S
   BSR4    = 7'd103,//carry to PCH
-  BSR5    = 7'd104;//present PC to bus
+  BSR5    = 7'd104,//present PC to bus
+  STX     = 7'd105;//ST{0,1,2}
 `ifdef SIM
 
 /*
@@ -616,6 +618,7 @@ always @*
       BSR3:   statename  = "BSR3";
       BSR4:   statename  = "BSR4";
       BSR5:   statename  = "BSR5";
+      STX:    statename  = "STX";
       default: statename = "ILLEGAL";
     endcase
 
@@ -719,7 +722,7 @@ always @(posedge clk)
   reg  STx_override;
   wire [7:0] MMU_out;
 
-  assign STx_override = 0;
+  assign STx_override = (state == STX);
 
   MMU mmu(.clk, .reset, .RDY, .load_en(MMU_tam), .store_en(MMU_tma),
           .MPR_mask(DIMUX), .d_in(regfile), .VADDR(AB), .STx_override,
@@ -814,6 +817,8 @@ always @*
         TXXD,
         TXXE:           AB = txx_dst;
 
+        STX:            AB = {8'h00, 2'b00, stx_dst};
+      
       default:          AB = PC;
     endcase
 
@@ -854,6 +859,10 @@ always @*
         TXX3,
         TXXE:    DO = regfile;
 
+
+        STX:     DO = DIMUX; //TODO: make this suck less
+
+      
         default: DO = store_zero ? 0 : regfile;
     endcase
 
@@ -957,7 +966,8 @@ always @*
         TXX3,
         TXXE,
         BSR1,
-        BSR2:    WE = 1;
+        BSR2,
+        STX:     WE = 1;
 
         INDX3,  // only if doing a STA, STX or STY
         INDY3,
@@ -1538,7 +1548,9 @@ always @(posedge clk or posedge reset)
                 8'b1x00_0010:   state <= REG;   // CLX, CLY
                 8'b10x0_0011:   state <= IMZP0; // TST imzp, imzpx
                 8'bx101_0100:   state <= CSX;   // CSL, CSH
-                8'b0100_0100:   state <= BSR0;
+                8'b0100_0100:   state <= BSR0;  // BSR
+                8'b000x_0011,
+                8'b0010_0011:   state <= STX;
 `ifdef IMPLEMENT_NOPS
                 8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
                 8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column
@@ -1702,6 +1714,8 @@ always @(posedge clk or posedge reset)
         BSR3    : state <= BSR4;
         BSR4    : state <= BSR5;
         BSR5    : state <= FETCH;
+
+        STX     : state <= FETCH;
     endcase
 
 /*
@@ -2077,6 +2091,19 @@ always @(posedge clk) //CSL/CSH
                 8'b1101_0100: HSM <= 1;
         endcase
 
+
+
+always @(posedge clk) //ST0, ST1, ST2
+     if( reset ) stx_dst <= 0;
+     else if( state == DECODE && RDY )
+        casex( IR )
+          8'b0000_0011: stx_dst <= 0;
+          8'b0001_0011: stx_dst <= 2;
+          8'b0010_0011: stx_dst <= 3;
+        endcase
+
+
+  
 always @(posedge clk )
      if( state == BSR0 && RDY )
                 bsr_disp <= DIMUX;
@@ -2136,7 +2163,7 @@ always @(posedge clk)
 
 //fseidel: logic for handling storage of BBX compare result
 always @(posedge clk)
-  if( state == BBX1 && RDY ) begin
+  if( state == BBX2 && RDY ) begin
     bbx_status <= (bbr_ins) ? AZ : ~AZ;
   end
 

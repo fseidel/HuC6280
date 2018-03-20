@@ -16,12 +16,14 @@ module memory(input wire [20:0] addr,
   
   reg [7:0]                    RAM[RAMSIZE-1:0];                 
 
-  wire [7:0]                   counter;                   
-  assign counter = RAM[21'h30];
+  wire [7:0]                   counter, status;                   
+  assign counter  = RAM[21'h30];
+  assign status   = RAM[21'h39];
   
   initial begin
     $readmemh("test.hex", ROM);
-    for(int i = 0; i < RAMSIZE; i++) RAM[i] = 8'h0;
+    for(int i = 0; i < RAMSIZE; i++)
+      RAM[i] = 8'h0;
   end
   
   always @(posedge clk) begin
@@ -31,7 +33,12 @@ module memory(input wire [20:0] addr,
       #1 $finish;
     end
     if(addr < 21'h1F0000) begin
-      if(re) dOut <= ROM[addr];
+      if(re) begin
+        if(^ROM[addr] !== 1'bx) //stupid hack for backup RAM
+          dOut <= ROM[addr];
+        else
+          dOut <= 8'h00;
+      end
       
     end
     else if(addr < 21'h1F2000) begin
@@ -43,11 +50,11 @@ module memory(input wire [20:0] addr,
     else if(addr >= 21'h1FE000) begin
       if(addr[12:0] < 13'h400) begin
         //$display("VDC port %x access", addr[1:0]);
-        if(re & (addr[1:0] != 2'b00))
+        if(re & addr[1])
           $display("non-status VDC read, this might be bad!");
       end
       else if(addr[12:0] < 13'h800) begin
-        //$display("VCE port %x access", addr[2:0]);
+        $display("VCE port %x access", addr[2:0]);
       end
       else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin
