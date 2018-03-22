@@ -44,15 +44,20 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
   
   enum logic [1:0] {IDLE, LOAD, STORE} state;
 
+  logic video_access;
+  logic MMU_stall_toggle;
 
+  assign video_access = (~CE7_n | ~CEK_n) & (RE | WE);
+  assign MMU_stall = video_access & ~MMU_stall_toggle;
+  
   always @(posedge clk) begin
     if(reset)
-      MMU_stall <= 0;
+      MMU_stall_toggle <= 0;
     else if(RDY) begin
-      if(~CE7_n & ~MMU_stall & (RE | WE))
-        MMU_stall <= 1;
+      if(video_access & ~MMU_stall_toggle)
+        MMU_stall_toggle <= 1;
       else
-        MMU_stall <= 0;
+        MMU_stall_toggle <= 0;
     end
   end
 

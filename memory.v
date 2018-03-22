@@ -51,8 +51,8 @@ module memory(input wire [20:0] addr,
     else if(addr >= 21'h1FE000) begin
       if(addr[12:0] < 13'h400) begin
         //$display("VDC port %x access", addr[1:0]);
-        if(re & addr[1])
-          $display("non-status VDC read, this might be bad!");
+        /*if(re & addr[1])
+          $display("non-status VDC read, this might be bad!");*/
       end
       else if(addr[12:0] < 13'h800) begin
         //$display("VCE port %x access", addr[2:0]);
