@@ -317,7 +317,10 @@ always @(posedge clk) begin
   if( RDY )
     latched_read <= cur_read;
 end
-  
+
+wire [7:0] PAD_out;
+assign PAD_out = 8'b1011_1111; // Region bit == Japan
+
 wire IO_sel; //will be set by MMU
 always_comb begin
   if(RE) begin
@@ -332,8 +335,8 @@ always_comb begin
       DIMUX_IO = 1;
     end
     else if(~CEIO_n) begin
-      IO_out   = 8'b0100_0000; // Region bit == Japan
-      DIMUX_IO <= 1;
+      IO_out   = PAD_out;
+      DIMUX_IO = 1;
     end
     else if(IO_sel) begin //external peripherals
       IO_out   = EXT_out;

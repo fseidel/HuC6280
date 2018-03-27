@@ -17,12 +17,17 @@ module memory(input wire [20:0] addr,
   
   reg [7:0]                    RAM[RAMSIZE-1:0];                 
 
-  wire [7:0]                   counter, status;                   
-  assign counter  = RAM[21'h30];
-  assign status   = RAM[21'h39];
+  int                          romsize;
   
   initial begin
-    $readmemh("test.hex", ROM);
+    $readmemh("PRG.hex", ROM);
+    //hacky way to autodetect ROM size for testbench
+    for(romsize = 0; romsize < ROMSIZE; romsize++)
+      if(^ROM[romsize] === 1'bx) begin
+        $display("romsize: %x", romsize);
+        break;
+      end
+    
     for(int i = 0; i < RAMSIZE; i++)
       RAM[i] = 8'h0;
   end
@@ -33,16 +38,33 @@ module memory(input wire [20:0] addr,
       $display("ERROR! RE AND WE ASSERTED");
       #1 $finish;
     end
-    if(addr < 21'h1F0000) begin
+
+    if(addr < 21'h1F0000) begin //ROM AREA mappings
       if(re & ~CE_n) begin
-        if(^ROM[addr] !== 1'bx) //stupid hack for backup RAM
-          dOut <= ROM[addr];
-        else
-          dOut <= 8'h00;
+        case(romsize)
+          21'h100000: begin //1MiB ROM
+            dOut <= ROM[addr[19:0]];
+          end
+          21'h80000: begin //512KiB ROM
+            dOut <= ROM[addr[18:0]];
+          end
+          21'h60000: begin //384KiB ROM
+            if(addr < 21'h80000) //mirror first 256KiB twice
+              dOut <= ROM[addr[17:0]];
+            else                //mirror last 128KiB every 128KiB
+              dOut <= ROM[{2'b10, addr[16:0]}];
+          end
+          21'h40000: begin //256KiB ROM
+            dOut <= ROM[addr[17:0]];
+          end
+          default: begin  //unimplemented ROM size TODO: 768KiB
+            $display("ROM SIZE UNIMPLIMENTED!");
+            #1 $finish;
+          end
+        endcase
       end
-      
     end
-    else if(addr < 21'h1F2000) begin
+    else if(addr < 21'h1F8000) begin
       if(we & ~CER_n)
         RAM[addr[12:0]] <= dIn;
       else if(re & ~CER_n)
@@ -60,7 +82,6 @@ module memory(input wire [20:0] addr,
       else if(addr[12:0] == 13'h1000) begin // controller
         if(re) begin
           //$display("controller read");
-          dOut <= 8'b0100_0000; // Region bit == Japan
         end
         else if(we) begin
           //$display("controller write");

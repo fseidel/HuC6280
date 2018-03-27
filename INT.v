@@ -27,7 +27,8 @@ module INT_ctrl(input wire        clk, reset,
    * Despite the name, IRQ_en is really an interrupt DISABLE register.
    * Setting a bit in the register disables the respective interrupt.
    */
-  assign TIQ  = ~TIQ_n  & ~IRQ_en[2];
+  //assign TIQ  = ~TIQ_n  & ~IRQ_en[2];
+  assign TIQ  = 0; //disable timer interrupts for now
   assign IRQ1 = ~IRQ1_n & ~IRQ_en[1];
   assign IRQ2 = ~IRQ2_n & ~IRQ_en[0];
   
