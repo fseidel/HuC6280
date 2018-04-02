@@ -26,7 +26,7 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
   reg [7:0]      localmask; //a copy of the mask  
 
   assign CE_n   = !(PADDR <= 21'h1EFFFF);
-  assign CER_n  = !(PADDR >= 21'h1F0000 && PADDR <= 21'h1F1FFF);
+  assign CER_n  = !(PADDR >= 21'h1F0000 && PADDR <= 21'h1F7FFF);
   assign CE7_n  = !(PADDR >= 21'h1FE000 && PADDR <= 21'h1FE3FF);
   assign CEK_n  = !(PADDR >= 21'h1FE400 && PADDR <= 21'h1FE7FF);
   assign CEP_n  = !(PADDR >= 21'h1FE800 && PADDR <= 21'h1FEBFF);
@@ -42,10 +42,10 @@ module MMU(input wire        clk, reset, RDY, //self-explanatory
                  (21'h1FE000 | VADDR[1:0]) : 
                  {MPR[VADDR[15:13]], VADDR[12:0]};
   
-  enum logic [1:0] {IDLE, LOAD, STORE} state;
+  enum reg [1:0] {IDLE, LOAD, STORE} state;
 
-  logic video_access;
-  logic MMU_stall_toggle;
+  reg video_access;
+  reg MMU_stall_toggle;
 
   assign video_access = (~CE7_n | ~CEK_n) & (RE | WE);
   assign MMU_stall = video_access & ~MMU_stall_toggle;

@@ -24,7 +24,7 @@ module memory(input wire [20:0] addr,
     //hacky way to autodetect ROM size for testbench
     for(romsize = 0; romsize < ROMSIZE; romsize++)
       if(^ROM[romsize] === 1'bx) begin
-        $display("romsize: %x", romsize);
+        $display("romsize: %dk", romsize/1024);
         break;
       end
     
@@ -39,7 +39,7 @@ module memory(input wire [20:0] addr,
       #1 $finish;
     end
 
-    if(addr < 21'h1F0000) begin //ROM AREA mappings
+    if(addr < 21'h100000) begin //ROM AREA mappings
       if(re & ~CE_n) begin
         case(romsize)
           21'h100000: begin //1MiB ROM
@@ -58,19 +58,28 @@ module memory(input wire [20:0] addr,
             dOut <= ROM[addr[17:0]];
           end
           default: begin  //unimplemented ROM size TODO: 768KiB
-            $display("ROM SIZE UNIMPLIMENTED!");
-            #1 $finish;
+            //$display("ROM SIZE UNIMPLIMENTED!");
+            dOut <= ROM[addr];
+            //#1 $finish;
           end
         endcase
       end
     end
-    else if(addr < 21'h1F8000) begin
+    else if(addr < 21'h1F0000) begin //CD + backup RAM, return 0xFF
+      dOut <= 8'hFF;
+    end
+    else if(addr < 21'h1F8000) begin //RAM on page 0xF8, mirrored 0xF9-0xFB
+      /*
       if(we & ~CER_n)
         RAM[addr[12:0]] <= dIn;
       else if(re & ~CER_n)
         dOut <= RAM[addr[12:0]];
+       */
     end
-    else if(addr >= 21'h1FE000) begin
+    else if(addr < 21'hFE000) begin //unused, return 0xFF
+      dOut <= 8'hFF;
+    end
+    else begin                      //hardware page, just here for debug
       if(addr[12:0] < 13'h400) begin
         //$display("VDC port %x access", addr[1:0]);
         /*if(re & addr[1])
@@ -91,7 +100,7 @@ module memory(input wire [20:0] addr,
         //$display("PSG access");
       end
       else if(addr[12:0] >= 13'hC00 && addr[12:0] < 13'h1000) begin //TIMER
-        string str[2] = {"read", "write"};
+        //string str[2] = {"read", "write"};
         //$display("TIMER accessed, port %b %s", addr[0], str[~re]);
         //$display("dIn: %x", dIn);
       end

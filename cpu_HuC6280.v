@@ -58,15 +58,14 @@
 `define IMPLEMENT_CORRECT_BCD_FLAGS
 
 //set this to get debugging aids
-`define SIM
+//`define SIM
 
-module cpu_HuC6280( clk, reset, AB_21, DI, DO, EXT_out, RE, WE, IRQ1_n, IRQ2_n,
+module cpu_HuC6280( clk, reset, AB_21, DO, EXT_out, RE, WE, IRQ1_n, IRQ2_n,
                     NMI, HSM, RDY_n, CE_n, CER_n, CE7_n, CEK_n);
 
 input clk;              // CPU clock
 input reset;            // reset signal
-output reg [20:0] AB_21;// address bus (post-MMU)
-input [7:0] DI;         // data in, read bus
+output wire [20:0] AB_21; // address bus (post-MMU)
 output [7:0] DO;        // data out, write bus
 input  [7:0] EXT_out;   // data driven by external peripherals
 output RE;              // read enable
@@ -83,8 +82,8 @@ output CEK_n;           // VCE enable signal
 
 //clocking
 wire clk72_en, clk18_en;
-clock_divider #(3)  clk72(.clk, .reset, .clk_en(clk72_en));
-clock_divider #(12) clk18(.clk, .reset, .clk_en(clk18_en));
+clock_divider #(3)  clk72(.clk(clk), .reset(reset), .clk_en(clk72_en));
+clock_divider #(12) clk18(.clk(clk), .reset(reset), .clk_en(clk18_en));
 
 wire clk_en;
 //assign clk_en = 1; //This line is nice for testing, but BE CAREFUL
@@ -95,6 +94,9 @@ wire RDY_preMMU, RDY, MMU_stall;
 assign RDY_preMMU = ~RDY_n & clk_en; //cheap hack to do variable clock speed
 assign RDY = RDY_preMMU & ~MMU_stall;
 
+wire [7:0] DI;         // data in, read bus  (for RAM)
+
+  
 //wire CE7_n;
 //wire CEK_n;
 wire CEP_n;
@@ -103,6 +105,10 @@ wire CEIO_n;
 wire CECG_n; //Interrupt controller enable
 
 wire TIQ_n;  // timer interrupt request
+
+MAIN_RAM ram(.clock(clk), .address(AB_21[12:0]), .data(DO),
+             .wren(WE & ~CER_n), .q(DI));
+  
 
   /* //TODO: enable these
 output CE_n;
@@ -152,7 +158,6 @@ wire HC;                // ALU half carry
 
 reg  [7:0] AI;          // ALU Input A
 reg  [7:0] BI;          // ALU Input B
-wire [7:0] DI;          // Data In
 wire [7:0] IR;          // Instruction register
 reg  [7:0] DO;          // Data Out
 wire [7:0] AO;          // ALU output after BCD adjustment
@@ -292,8 +297,8 @@ end
  * DIMUX handling
  * TODO: handle cases where I/O buffer is not written
  */
-wire [7:0] INT_out, TIMER_out;
-reg [7:0] IO_out, cur_read, latched_read;
+wire [7:0] INT_out, TIMER_out, cur_read;
+reg [7:0] IO_out, latched_read;
 reg     read_delay; //selects whether or not we go for a real read on next clock
 
 /*
@@ -322,20 +327,24 @@ wire [7:0] PAD_out;
 assign PAD_out = 8'b1011_1111; // Region bit == Japan
 
 wire IO_sel; //will be set by MMU
-always_comb begin
+always @* begin
+  IO_out  = 8'hxx;
+  DIMUX_IO = 0;
   if(RE) begin
-    IO_out  = 8'hxx;
-    DIMUX_IO = 0;
-    if(~CECG_n) begin
+    if(~CECG_n) begin //interrupt controller
       IO_out   = INT_out;
       DIMUX_IO = 1;
     end
-    else if (~CET_n) begin
+    else if (~CET_n) begin //timer
       IO_out   = TIMER_out;
       DIMUX_IO = 1;
     end
-    else if(~CEIO_n) begin
+    else if(~CEIO_n) begin //controller/IO port
       IO_out   = PAD_out;
+      DIMUX_IO = 1;
+    end
+    else if(~CE_n) begin //ROM
+      IO_out   = EXT_out;
       DIMUX_IO = 1;
     end
     else if(IO_sel) begin //external peripherals
@@ -351,18 +360,19 @@ end
  */
 wire TIQ_ack;
 
-INT_ctrl ictrl(.clk, .reset, .RDY, .re(RE), .we(WE), .CECG_n, .addr(AB_21[1:0]),
+INT_ctrl ictrl(.clk(clk), .reset(reset), .RDY(RDY), .re(RE), .we(WE),
+	       .CECG_n(CECG_n), .addr(AB_21[1:0]),
                .dIn(DO), .dOut(INT_out),
-               .TIQ_n, .IRQ1_n, .IRQ2_n,
-               .TIQ, .IRQ1, .IRQ2,
-               .TIQ_ack);
+               .TIQ_n(TIQ_n), .IRQ1_n(IRQ1_n), .IRQ2_n(IRQ2_n),
+               .TIQ(TIQ), .IRQ1(IRQ1), .IRQ2(IRQ2),
+               .TIQ_ack(TIQ_ack));
 /*
  * Timer
  */
-TIMER itimer(.clk, .reset, //stupid name because of keywords
+TIMER itimer(.clk(clk), .reset(reset), //stupid name because of keywords
              .re(RE), .we(WE),
              .clk_en(clk72_en), .dIn(DO), .dOut(TIMER_out),
-             .CET_n, .addr(AB_21[0]), .TIQ_ack, .TIQ_n);
+             .CET_n(CET_n), .addr(AB_21[0]), .TIQ_ack(TIQ_ack), .TIQ_n(TIQ_n));
 
 
 /*
@@ -738,24 +748,29 @@ always @(posedge clk)
    * MMU
    */
   reg  MMU_tam, MMU_tma;
-  reg  STx_override;
+  wire  STx_override;
   wire [7:0] MMU_out;
 
   assign STx_override = (state == STX1);
 
-  MMU mmu(.clk, .reset, .RDY(RDY_preMMU), .load_en(MMU_tam), .store_en(MMU_tma),
-          .RE, .WE, .MMU_stall,
-          .MPR_mask(DIMUX), .d_in(regfile), .VADDR(AB), .STx_override,
+  MMU mmu(.clk(clk), .reset(reset), 
+	  .RDY(RDY_preMMU), .load_en(MMU_tam), .store_en(MMU_tma),
+          .RE(RE), .WE(WE), .MMU_stall(MMU_stall),
+          .MPR_mask(DIMUX), .d_in(regfile), .VADDR(AB),
+	  .STx_override(STx_override),
           .PADDR(AB_21), .d_out(MMU_out),
-          .CE7_n, .CEK_n, .CEP_n, .CET_n, .CEIO_n, .CECG_n, .CE_n, .CER_n,
-          .IO_sel);
+          .CE7_n(CE7_n), .CEK_n(CEK_n), .CEP_n(CEP_n), .CET_n(CET_n),
+	  .CEIO_n(CEIO_n), .CECG_n(CECG_n), .CE_n(CE_n), .CER_n(CER_n),
+          .IO_sel(IO_sel));
 
   always @* begin
+    MMU_tam = 0;
+    MMU_tma = 0;
     case( state )
       TAM0: MMU_tam = 1;
       TMA0: MMU_tma = 1;
       default: begin
-        MMU_tam = 0;
+	MMU_tam = 0;
         MMU_tma = 0;
       end
     endcase
@@ -1100,9 +1115,12 @@ assign AZ1 = AZ;
  * Reading directly from the bus can also occur during a transfer
  */
 always @(posedge clk) begin
-    if(reset)
-      for(int i = 0; i < 4; i++)
-        AXYS[i] <= 8'h00;         //TODO: do we really need this?
+    if(reset) begin
+      AXYS[0] <= 0;
+      AXYS[1] <= 0;
+      AXYS[2] <= 0;
+      AXYS[3] <= 0;
+    end
     else if( write_register & RDY )
       case ( state )
         JSR0,
@@ -1594,10 +1612,12 @@ always @(posedge clk or posedge reset)
                 8'b0010_0011:   state <= STX0;  // ST{0,1,2}
                 8'b1111_0100:   state <= REG;   // SET
 `ifdef IMPLEMENT_NOPS
-                8'bxxxx_xx11:   state <= REG;   // (NOP1: 3/B column)
-                8'bxxx0_0010:   state <= FETCH; // (NOP2: 2 column, 4 column
-                                                // handled correctly below)
-                8'bx1x1_1100:   state <= ABS0;  // (NOP3: C column)
+                8'bxxxx_1011,                   // (NOP1: B column)
+                8'b0011_0011,                   // (NOP1: 3B)
+                8'b0110_0011:   state <= REG;   // (NOP1: 6B)
+                8'b1110_0010:   state <= FETCH; // (NOP2: E2)
+                8'b0101_1100,                   // (NOP3: C column)
+                8'b11x1_1100:   state <= ABS0;  // (NOP3: C column)
 `endif
                 8'b0x00_1000:   state <= PUSH0;
                 8'b0x10_1000:   state <= PULL0;
@@ -2058,11 +2078,9 @@ always @(posedge clk )
     casex( IR )
       8'bxxxx_0111: begin     // RMB/SMB
         xmb_ins    <= 1;
-        mask_shift <= IR[6:4];
       end
       8'bxxxx_1111: begin
         bbx_ins    <= 1;
-        mask_shift <= IR[6:4];
       end
       default:      begin
         xmb_ins <= 0;
@@ -2084,10 +2102,13 @@ always @(posedge clk )
     casex( IR )
       8'bxxxx_1111:   begin     // BBR/BBS
         bbx_ins                 <= 1;
-        mask_shift              <= IR[6:4];
       end
       default:        bbx_ins <= 0;
     endcase
+
+always @(posedge clk)
+  if( state == DECODE && RDY )
+    mask_shift              <= IR[6:4];
 
 always @(posedge clk )
      if( state == DECODE && RDY )
@@ -2161,14 +2182,15 @@ always @(posedge clk )
                 bsr_disp <= DIMUX;
 
 
-always @*
+always @* begin
+  txx_ins = 0;
   if( state == DECODE ) // fseidel: RDY shouldn't be necessary here
     casex( IR )
       8'b0111_0011,
       8'b11xx_0011: txx_ins = 1;
       default: txx_ins = 0;
     endcase
-
+end
   /* TODO: WTF
 always @* begin //TODO: actually implement this
   STx_override = 3'b000;
