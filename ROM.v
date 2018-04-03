@@ -5,8 +5,9 @@
  * PC Engine ROM (HuCard/TurboChip) emulator
  * No support for on-card memory mappers or additional RAM
  */
-module ROM(input  wire [19:0] addr,
-           input wire         SW[2:0],
+module ROM(input wire         clk, reset,
+	       input wire [19:0]  addr,
+           input wire [2:0]   SW,
 	       output wire [19:0] SRAM_ADDR,
 	       input wire [15:0]  SRAM_DQ,
            inout wire [7:0]   D,
@@ -84,12 +85,22 @@ module ROM(input  wire [19:0] addr,
       end
     endcase
   end
-`else // !`ifdef EMULATE_ROM  
+`else // !`ifdef EMULATE_ROM
+  //logic [19:0] sram_addr_reg;
+  always_ff @(posedge clk) begin
+    if(reset)
+      romsel <= SW;
+  end
+  /*
+  always_comb begin
+    if(addr < 21'h80000) //mirror first 256KiB twice
+      sram_addr_reg = addr[17:0];
+    else                //mirror last 128KiB every 128KiB
+      sram_addr_reg = {2'b10, addr[16:0]};
+  end
+   */
   assign SRAM_ADDR  = {1'b0, mapped_addr[19:1]};
   assign dOut  = (mapped_addr[0]) ? SRAM_DQ[15:8] : SRAM_DQ[7:0];
-  always @* begin
-    romsel = SW[2:0];
-  end
 `endif //  `ifdef EMULATE_ROM
   
 endmodule

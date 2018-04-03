@@ -1,4 +1,5 @@
 `default_nettype none
+
 /*
  * verilog model of HuC6280 CPU.
  *
@@ -58,7 +59,7 @@
 `define IMPLEMENT_CORRECT_BCD_FLAGS
 
 //set this to get debugging aids
-//`define SIM
+`define SIM
 
 module cpu_HuC6280( clk, reset, AB_21, DO, EXT_out, RE, WE, IRQ1_n, IRQ2_n,
                     NMI, HSM, RDY_n, CE_n, CER_n, CE7_n, CEK_n);
